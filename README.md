@@ -1,25 +1,216 @@
 # AgentShield
 
-AgentShield is a spending firewall for autonomous agents. It performs financial triangulation before any payment and enforces HITL pause/resume for suspicious requests.
+AgentShield is a **spending firewall for autonomous agents**.  
+It sits between an AI spending agent and payment rails, runs deterministic risk checks, and only allows money movement when policy is satisfied.
 
-## Core Features
+Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with optional fiat adapter compatibility.
 
-- `POST /v1/spend-request` with SAFE/SUSPICIOUS/MALICIOUS branching
-- `POST /v1/hitl/resolve/{request_id}` for human approval/deny webhook
-- Stablecoin-first policy controls (token, network, destination wallet)
-- Redis-backed budget and loop detection
-- Immutable audit ledger in relational storage
+## What This Service Does
 
-## Local Setup
+- Receives spend intents through `POST /v1/spend-request`
+- Runs **Financial Triangulation**:
+  - Quantitative checks (Redis)
+  - Policy checks (Postgres-backed Agent policy)
+  - Semantic checks (local SLM over direct HTTP)
+- Produces one of 3 outcomes:
+  - `SAFE` -> execute immediately (`200`)
+  - `SUSPICIOUS` -> pause for Human-in-the-Loop (`202`)
+  - `MALICIOUS` -> block (`403`)
+- Resolves paused requests via `POST /v1/hitl/resolve/{request_id}`
+- Persists append-only audit records for every decision/execution step
 
-1. Copy `.env.example` to `.env`
-2. Start dependencies:
+## Architecture Overview
+
+### Main Components
+
+- **FastAPI API Layer**
+  - `app/main.py`
+  - `app/api/v1/routes/spend.py`
+  - `app/api/v1/routes/hitl.py`
+- **Policy Engine**
+  - `app/policy/engine.py`
+  - `app/policy/checks/quantitative.py`
+  - `app/policy/checks/policy_db.py`
+  - `app/policy/checks/semantic.py`
+- **Persistence**
+  - Postgres/SQLModel: `app/db/postgres.py`, `app/models/*`
+  - Redis: `app/db/redis.py`
+- **Payment Adapters**
+  - Base interface: `app/services/payment/adapter_base.py`
+  - Stablecoin execution: `app/services/payment/tempo_adapter.py`
+  - Optional fiat execution: `app/services/payment/stripe_adapter.py`
+- **HITL Services**
+  - Notification stub: `app/services/hitl/notifier.py`
+  - State transitions: `app/services/hitl/state_manager.py`
+- **SLM Client**
+  - `app/services/slm/client.py` (direct HTTP, no LangChain)
+- **Idempotency + Metrics**
+  - `app/services/idempotency.py`
+  - `app/core/metrics.py`
+
+## Financial Triangulation Flow
+
+For each `POST /v1/spend-request`, AgentShield:
+
+1. Validates request + authenticates caller.
+2. Loads Agent policy profile.
+3. Computes transaction fingerprint.
+4. Runs **Check A (Redis Quantitative)**:
+   - Daily budget projection
+   - Loop pattern detection
+   - Destination burst detection
+5. Runs **Check B (Policy DB)**:
+   - Vendor blocklist
+   - Amount over auto-approval threshold
+   - Stablecoin token/network/address policy
+6. Runs **Check C (SLM Semantic)**:
+   - Goal/action alignment score and reason codes
+7. Synthesizes verdict:
+   - `MALICIOUS` on hard deny conditions
+   - `SUSPICIOUS` on soft risk conditions
+   - `SAFE` otherwise
+8. Branches outcome:
+   - `SAFE`: execute payment + commit budget + audit log
+   - `MALICIOUS`: block + audit log
+   - `SUSPICIOUS`: create pending spend + send HITL text + return wait response
+
+## Human-in-the-Loop (HITL) Guarantee
+
+If a request is suspicious:
+
+- status becomes `PENDING_HITL`
+- payment is **not executed**
+- agent receives `202` with `next_action=AGENT_MUST_WAIT`
+- human approves/denies via webhook endpoint
+- only `APPROVE` triggers payment execution
+- `DENY` (or expiration) ends request without payment
+
+This enforces the requirement that the agent must wait for human text approval before purchase is allowed.
+
+## API Contracts
+
+### 1) `POST /v1/spend-request`
+
+Required core fields:
+
+- `agent_id`
+- `declared_goal`
+- `amount_cents`
+- `currency`
+- `vendor_url_or_name`
+- `item_description`
+- `asset_type` (`STABLECOIN` or `FIAT`)
+
+Stablecoin-required fields:
+
+- `stablecoin_symbol` (`USDC` or `USDT`)
+- `network` (`ethereum`, `base`, `solana`, `polygon`, `arbitrum`)
+- `destination_address`
+
+Responses:
+
+- `200` approved and executed
+- `202` pending HITL
+- `403` blocked
+
+Schema source: `app/api/v1/schemas/spend.py`
+
+### 2) `POST /v1/hitl/resolve/{request_id}`
+
+Request:
+
+- `decision` (`APPROVE` or `DENY`)
+- `resolver_id`
+- `channel` (`dashboard` or `sms`)
+- optional metadata (`resolution_note`, `provider_message_id`)
+
+Response includes resolution status and whether payment was executed.
+
+Schema source: `app/api/v1/schemas/hitl.py`
+
+## Data Models
+
+### Postgres Tables (SQLModel)
+
+- `Agent` (`app/models/agent.py`)
+  - Budget thresholds, blocked vendors, stablecoin policies, HITL contact
+- `SpendAuditLog` (`app/models/spend_audit_log.py`)
+  - Append-only ledger of checks/verdicts/execution metadata
+- `PendingSpend` (`app/models/pending_spend.py`)
+  - Paused requests awaiting human decision
+
+Migration artifact:
+
+- `app/migrations/versions/0001_initial_schema.sql`
+
+### Redis Keys
+
+- Daily budget:
+  - `budget:daily:{agent_id}:{asset_type}:{yyyy-mm-dd}`
+- Idempotency cache:
+  - `idempotency:{agent_id}:{idempotency_key}`
+- Loop detection:
+  - `loop:txn:{agent_id}:{fingerprint}`
+- Destination burst:
+  - `dest:burst:{agent_id}:{network}:{destination_address}`
+
+## Security + Reliability Notes
+
+- Header-based auth hooks exist in `app/core/security.py` (currently greenfield-safe defaults)
+- Idempotency support prevents duplicate request execution
+- Request tracing middleware injects:
+  - `x-request-id`
+  - `x-latency-ms`
+- Lightweight in-process metrics counters in `app/core/metrics.py`
+- Audit ledger includes stablecoin execution fields (`network`, `destination_address`, `onchain_tx_hash`)
+
+## Local Development
+
+## Prerequisites
+
+- Python `3.11+`
+- Docker
+
+## Setup
+
+1. Copy env template:
+   - `cp .env.example .env`
+2. Install dependencies:
+   - `python3.11 -m pip install -e ".[dev]"`
+3. Start infra:
    - `docker compose -f infra/docker-compose.yml up -d`
-3. Run API:
+4. Run API:
    - `uvicorn app.main:app --reload`
 
-## Notes
+## Infra Services (`infra/docker-compose.yml`)
 
-- Python `3.11+` is required.
-- The initial SQL migration is in `app/migrations/versions/0001_initial_schema.sql`.
+- Postgres on `localhost:5432`
+- Redis on `localhost:6379`
+- Ollama-compatible local SLM endpoint on `localhost:11434`
+
+## Testing
+
+Run all tests:
+
+- `python3.11 -m pytest`
+
+Current suite:
+
+- Unit tests: policy checks
+- Integration tests: SAFE / SUSPICIOUS->APPROVE / MALICIOUS flows
+- E2E contract-shape tests for schemas
+
+## Current Implementation Boundaries
+
+- SMS sending is currently a notifier stub (`HitlNotifier`) for easy provider swap.
+- SLM integration expects local model endpoint and includes fallback behavior if unavailable.
+- Alembic workflow is documented but not fully wired with an `alembic.ini`/env runner yet.
+
+## Suggested Next Steps
+
+1. Wire production auth/signature verification (HMAC/JWT and webhook signatures).
+2. Integrate real SMS provider and inbound text parser.
+3. Add full Alembic environment and migration runner.
+4. Add outbound callback delivery for resolved HITL requests.
+5. Export metrics to Prometheus/OpenTelemetry.
 
