@@ -1,0 +1,2 @@
+"""Payment provider adapters."""
+
