@@ -21,6 +21,12 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
 
 ## Architecture Overview
 
+### Trust Boundaries
+
+- **Untrusted input**: autonomous spending-agent requests
+- **Controlled decision layer**: FastAPI + policy engine + Redis + Postgres + local SLM
+- **External side effects**: payment adapters and HITL notification channel
+
 ### Main Components
 
 - **FastAPI API Layer**
@@ -47,6 +53,34 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
 - **Idempotency + Metrics**
   - `app/services/idempotency.py`
   - `app/core/metrics.py`
+
+### Architecture Sequence
+
+```mermaid
+flowchart TD
+    agent[SpendingAgent] --> firewall[AgentShieldAPI]
+    firewall --> checkA[RedisCheckA]
+    firewall --> checkB[PostgresCheckB]
+    firewall --> checkC[LocalSLMCheckC]
+    checkA --> synth[VerdictSynthesis]
+    checkB --> synth
+    checkC --> synth
+    synth -->|SAFE| pay[PaymentAdapter]
+    pay --> ok200[Return200ApprovedExecuted]
+    synth -->|MALICIOUS| deny403[Return403Blocked]
+    synth -->|SUSPICIOUS| pending[CreatePendingSpend]
+    pending --> sms[SendHitlSms]
+    sms --> resp202[Return202AgentMustWait]
+    human[HumanApprover] -->|SMSorDashboardDecision| resolve[HitlResolveEndpoint]
+    resolve -->|APPROVE| pay2[PaymentAdapter]
+    resolve -->|DENY| denyHuman[MarkDeniedByHuman]
+```
+
+### Decision Matrix
+
+- `SAFE`: all checks clean -> execute payment immediately (`200`)
+- `SUSPICIOUS`: soft-risk conditions -> pause and require HITL (`202`)
+- `MALICIOUS`: hard-deny condition -> block with no payment execution (`403`)
 
 ## Financial Triangulation Flow
 
