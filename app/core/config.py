@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     loop_window_seconds: int = Field(default=60)
     loop_threshold: int = Field(default=5)
     api_auth_header: str = Field(default="x-agent-key")
+    signature_tolerance_seconds: int = Field(default=300)
+    jwt_algorithm: str = Field(default="HS256")
+    jwt_secret: str = Field(default="dev-jwt-secret-change-me")
+    jwt_audience: str = Field(default="agentshield-api")
+    agent_hmac_secret: str = Field(default="dev-agent-hmac-secret-change-me")
+    webhook_hmac_secret: str = Field(default="dev-webhook-hmac-secret-change-me")
+    sms_provider: str = Field(default="stub")
 
 
 @lru_cache(maxsize=1)

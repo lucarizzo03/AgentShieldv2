@@ -8,6 +8,7 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
 ## What This Service Does
 
 - Receives spend intents through `POST /v1/spend-request`
+- Supports user-entered phone verification via OTP before SMS fallback is enabled
 - Runs **Financial Triangulation**:
   - Quantitative checks (Redis)
   - Policy checks (Postgres-backed Agent policy)
@@ -17,6 +18,8 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
   - `SUSPICIOUS` -> pause for Human-in-the-Loop (`202`)
   - `MALICIOUS` -> block (`403`)
 - Resolves paused requests via `POST /v1/hitl/resolve/{request_id}`
+- Accepts inbound SMS decisions via `POST /v1/hitl/sms/inbound`
+- Exposes dashboard queue APIs for pending HITL review
 - Persists append-only audit records for every decision/execution step
 
 ## Architecture Overview
@@ -46,8 +49,13 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
   - Stablecoin execution: `app/services/payment/tempo_adapter.py`
   - Optional fiat execution: `app/services/payment/stripe_adapter.py`
 - **HITL Services**
-  - Notification stub: `app/services/hitl/notifier.py`
+  - Provider-agnostic stub notification service: `app/services/hitl/notifier.py`
+  - Inbound text parser: `app/services/hitl/sms_parser.py`
+  - OTP generation/verification service: `app/services/hitl/otp.py`
   - State transitions: `app/services/hitl/state_manager.py`
+- **Dashboard Queue**
+  - Queue model: `app/models/dashboard_notification.py`
+  - Queue APIs: `app/api/v1/routes/dashboard.py`
 - **SLM Client**
   - `app/services/slm/client.py` (direct HTTP, no LangChain)
 - **Idempotency + Metrics**
@@ -81,6 +89,12 @@ flowchart TD
 - `SAFE`: all checks clean -> execute payment immediately (`200`)
 - `SUSPICIOUS`: soft-risk conditions -> pause and require HITL (`202`)
 - `MALICIOUS`: hard-deny condition -> block with no payment execution (`403`)
+
+HITL policy defaults in code:
+
+- Primary channel is `dashboard`
+- SMS is fallback-only for high-risk suspicious events
+- SMS fallback is used only when phone is verified
 
 ## Financial Triangulation Flow
 
@@ -121,7 +135,31 @@ If a request is suspicious:
 
 This enforces the requirement that the agent must wait for human text approval before purchase is allowed.
 
+### Phone Verification Flow (OTP)
+
+To support UI-driven phone onboarding:
+
+1. `POST /v1/agents/{agent_id}/contact/phone/start`
+   - Body: `phone_number` (E.164)
+   - Generates OTP and sends through configured provider path (stub logger in current build)
+2. `POST /v1/agents/{agent_id}/contact/phone/verify`
+   - Body: `phone_number`, `code`
+   - Stores verified phone on agent profile
+3. `PATCH /v1/agents/{agent_id}/preferences/hitl`
+   - Controls primary channel and high-risk SMS fallback toggle
+
 ## API Contracts
+
+### Endpoint Index
+
+- `POST /v1/spend-request`
+- `POST /v1/hitl/resolve/{request_id}`
+- `POST /v1/hitl/sms/inbound`
+- `POST /v1/agents/{agent_id}/contact/phone/start`
+- `POST /v1/agents/{agent_id}/contact/phone/verify`
+- `PATCH /v1/agents/{agent_id}/preferences/hitl`
+- `GET /v1/dashboard/agents/{agent_id}/notifications?status=OPEN`
+- `PATCH /v1/dashboard/agents/{agent_id}/notifications/{notification_id}`
 
 ### 1) `POST /v1/spend-request`
 
@@ -162,6 +200,37 @@ Response includes resolution status and whether payment was executed.
 
 Schema source: `app/api/v1/schemas/hitl.py`
 
+### 3) `POST /v1/hitl/sms/inbound`
+
+Inbound webhook for SMS providers (provider-agnostic parser endpoint).
+
+- Expected message format:
+  - `APPROVE <request_id>`
+  - `DENY <request_id>`
+- Validates sender phone against `PendingSpend.hitl_contact`
+- On valid decision, resolves the same pending request path as dashboard/webhook resolution
+- Responds with XML confirmation/error text
+
+### 4) Dashboard Queue Endpoints
+
+- `GET /v1/dashboard/agents/{agent_id}/notifications?status=OPEN`
+  - Returns queue items for the in-app approval dashboard
+- `PATCH /v1/dashboard/agents/{agent_id}/notifications/{notification_id}`
+  - Body action: `ACK` or `DISMISS`
+  - Marks notification for operator workflow state
+
+### 5) Contact and HITL Preference Endpoints
+
+- `POST /v1/agents/{agent_id}/contact/phone/start`
+  - Starts OTP verification for a user-entered phone number
+  - Requires authenticated agent scope match
+- `POST /v1/agents/{agent_id}/contact/phone/verify`
+  - Verifies OTP and stores `hitl_phone_number` + `hitl_phone_verified_at`
+- `PATCH /v1/agents/{agent_id}/preferences/hitl`
+  - Updates:
+    - `hitl_primary_channel` (currently `dashboard`)
+    - `hitl_sms_fallback_high_risk` (bool)
+
 ## Data Models
 
 ### Postgres Tables (SQLModel)
@@ -175,7 +244,8 @@ Schema source: `app/api/v1/schemas/hitl.py`
 
 Migration artifact:
 
-- `app/migrations/versions/0001_initial_schema.sql`
+- Alembic initial revision: `app/migrations/versions/20260418_0001_initial_schema.py`
+- Legacy SQL snapshot: `app/migrations/versions/0001_initial_schema.sql`
 
 ### Redis Keys
 
@@ -190,7 +260,11 @@ Migration artifact:
 
 ## Security + Reliability Notes
 
-- Header-based auth hooks exist in `app/core/security.py` (currently greenfield-safe defaults)
+- Production auth verification is implemented in `app/core/security.py`:
+  - Bearer JWT (`Authorization: Bearer <token>`)
+  - HMAC signed agent requests (`x-agent-id`, `x-timestamp`, `x-signature`)
+  - HMAC signed webhook requests (`x-webhook-timestamp`, `x-webhook-signature`)
+- Signature replay protection enforced with timestamp tolerance (`SIGNATURE_TOLERANCE_SECONDS`)
 - Idempotency support prevents duplicate request execution
 - Request tracing middleware injects:
   - `x-request-id`
@@ -216,6 +290,25 @@ Migration artifact:
 4. Run API:
    - `uvicorn app.main:app --reload`
 
+## Authentication and Signature Settings
+
+Configure these values in `.env` for production:
+
+- `JWT_ALGORITHM`
+- `JWT_SECRET`
+- `JWT_AUDIENCE`
+- `AGENT_HMAC_SECRET`
+- `WEBHOOK_HMAC_SECRET`
+- `SIGNATURE_TOLERANCE_SECONDS`
+- `SMS_PROVIDER` (`stub`)
+
+Canonical HMAC message format used by the API:
+
+- Agent request signatures:
+  - `<METHOD>\\n<PATH>\\n<TIMESTAMP_ISO8601>\\n<SHA256_BODY_HEX>\\n<AGENT_ID>`
+- HITL webhook signatures:
+  - `<METHOD>\\n<PATH>\\n<TIMESTAMP_ISO8601>\\n<SHA256_BODY_HEX>`
+
 ## Infra Services (`infra/docker-compose.yml`)
 
 - Postgres on `localhost:5432`
@@ -231,20 +324,43 @@ Run all tests:
 Current suite:
 
 - Unit tests: policy checks
+- Unit tests: SMS inbound parser
 - Integration tests: SAFE / SUSPICIOUS->APPROVE / MALICIOUS flows
+- Integration tests: OTP phone verification and HITL preference updates
+- Integration tests: dashboard queue list/ack behavior
 - E2E contract-shape tests for schemas
+
+## Database Migrations (Alembic)
+
+Alembic is fully wired in this repository and reads runtime DB config from `app/core/config.py`.
+
+Core files:
+
+- `alembic.ini`
+- `app/migrations/env.py`
+- `app/migrations/script.py.mako`
+- `app/migrations/versions/20260418_0001_initial_schema.py`
+- `scripts/migrate.py`
+
+Common commands:
+
+- Apply migrations:
+  - `python3.11 scripts/migrate.py upgrade head`
+- Show current revision:
+  - `python3.11 scripts/migrate.py current`
+- Create migration from model changes:
+  - `python3.11 scripts/migrate.py revision --autogenerate --message "your change"`
+- Roll back one revision:
+  - `python3.11 scripts/migrate.py downgrade -1`
 
 ## Current Implementation Boundaries
 
 - SMS sending is currently a notifier stub (`HitlNotifier`) for easy provider swap.
 - SLM integration expects local model endpoint and includes fallback behavior if unavailable.
-- Alembic workflow is documented but not fully wired with an `alembic.ini`/env runner yet.
 
 ## Suggested Next Steps
 
-1. Wire production auth/signature verification (HMAC/JWT and webhook signatures).
-2. Integrate real SMS provider and inbound text parser.
-3. Add full Alembic environment and migration runner.
-4. Add outbound callback delivery for resolved HITL requests.
-5. Export metrics to Prometheus/OpenTelemetry.
+1. Add outbound callback delivery for resolved HITL requests.
+2. Export metrics to Prometheus/OpenTelemetry.
+3. Add pagination cursors and richer filters for dashboard queue endpoints.
 

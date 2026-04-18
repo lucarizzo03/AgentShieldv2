@@ -38,6 +38,7 @@ app/services/__init__.py
 app/services/idempotency.py
 app/services/hitl/__init__.py
 app/services/hitl/notifier.py
+app/services/hitl/sms_parser.py
 app/services/hitl/state_manager.py
 app/services/payment/__init__.py
 app/services/payment/adapter_base.py

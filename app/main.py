@@ -3,6 +3,8 @@ from uuid import uuid4
 
 from fastapi import FastAPI, Request
 
+from app.api.v1.routes.contact import router as contact_router
+from app.api.v1.routes.dashboard import router as dashboard_router
 from app.api.v1.routes.hitl import router as hitl_router
 from app.api.v1.routes.spend import router as spend_router
 from app.core.logging import configure_logging
@@ -29,6 +31,8 @@ def create_app() -> FastAPI:
 
     app.include_router(spend_router, prefix="/v1")
     app.include_router(hitl_router, prefix="/v1")
+    app.include_router(contact_router, prefix="/v1")
+    app.include_router(dashboard_router, prefix="/v1")
     return app
 
 

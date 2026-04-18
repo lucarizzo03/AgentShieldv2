@@ -8,10 +8,11 @@ from sqlmodel import Session, select
 from app.api.v1.schemas.spend import SpendRequest
 from app.core.config import get_settings
 from app.core.metrics import increment
-from app.core.security import verify_agent_auth
+from app.core.security import AuthContext, verify_agent_auth
 from app.db.postgres import get_session
 from app.db.redis import get_redis
 from app.models.agent import Agent
+from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
 from app.policy.checks.quantitative import commit_budget_spend, transaction_fingerprint
@@ -29,14 +30,30 @@ def _select_adapter(asset_type: str):
     return TempoAdapter() if asset_type == "STABLECOIN" else StripeAdapter()
 
 
+def _is_high_risk_suspicious(reasons: list[str]) -> bool:
+    high_risk_flags = {
+        "SEMANTIC_MISMATCH_MEDIUM",
+        "LOOP_PATTERN_DETECTED",
+        "DESTINATION_BURST_DETECTED",
+        "BUDGET_DAILY_LIMIT_EXCEEDED",
+    }
+    return any(reason in high_risk_flags for reason in reasons)
+
+
 @router.post("/spend-request")
 async def spend_request(
     payload: SpendRequest,
     response: Response,
-    _: None = Depends(verify_agent_auth),
+    auth_context: AuthContext = Depends(verify_agent_auth),
     session: Session = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
+    if auth_context.agent_id and auth_context.agent_id != payload.agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated agent_id does not match request payload agent_id",
+        )
+
     agent = session.exec(select(Agent).where(Agent.agent_id == payload.agent_id)).first()
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
@@ -150,6 +167,14 @@ async def spend_request(
 
     settings = get_settings()
     increment("spend.verdict.suspicious")
+    sms_fallback_triggered = (
+        agent.hitl_primary_channel == "dashboard"
+        and agent.hitl_sms_fallback_high_risk
+        and bool(agent.hitl_phone_number)
+        and bool(agent.hitl_phone_verified_at)
+        and _is_high_risk_suspicious(tri.reasons)
+    )
+
     pending = PendingSpend(
         request_id=request_id,
         agent_id=payload.agent_id,
@@ -162,9 +187,35 @@ async def spend_request(
             "semantic_result": tri.semantic_result,
         },
         state="WAITING_HUMAN",
-        hitl_channel="sms",
-        hitl_contact=agent.hitl_phone_number,
+        hitl_channel="sms" if sms_fallback_triggered else "dashboard",
+        hitl_contact=agent.hitl_phone_number if sms_fallback_triggered else None,
         expires_at=now + timedelta(seconds=settings.hitl_default_timeout_seconds),
+    )
+    notification = DashboardNotification(
+        request_id=request_id,
+        agent_id=payload.agent_id,
+        category="HITL_PENDING",
+        priority="HIGH" if _is_high_risk_suspicious(tri.reasons) else "NORMAL",
+        status="OPEN",
+        summary=(
+            f"HITL review required for {payload.amount_cents} {payload.currency} "
+            f"to {payload.vendor_url_or_name}"
+        ),
+        payload_json={
+            "request_id": request_id,
+            "verdict": "SUSPICIOUS",
+            "reasons": tri.reasons,
+            "declared_goal": payload.declared_goal,
+            "amount_cents": payload.amount_cents,
+            "currency": payload.currency,
+            "vendor_url_or_name": payload.vendor_url_or_name,
+            "item_description": payload.item_description,
+            "asset_type": payload.asset_type,
+            "stablecoin_symbol": payload.stablecoin_symbol,
+            "network": payload.network,
+            "destination_address": payload.destination_address,
+            "expires_at": (now + timedelta(seconds=settings.hitl_default_timeout_seconds)).isoformat(),
+        },
     )
     audit = SpendAuditLog(
         request_id=request_id,
@@ -185,17 +236,19 @@ async def spend_request(
         status="PENDING_HITL",
     )
     session.add(pending)
+    session.add(notification)
     session.add(audit)
     session.commit()
-    await HitlNotifier().send_sms(agent=agent, pending=pending)
+    if sms_fallback_triggered:
+        await HitlNotifier().send_sms(agent=agent, pending=pending)
 
     body = {
         "request_id": request_id,
         "status": "PENDING_HITL",
         "verdict": "SUSPICIOUS",
         "hitl": {
-            "state": "WAITING_HUMAN_TEXT_RESPONSE",
-            "channel": "sms",
+            "state": "WAITING_HUMAN_TEXT_RESPONSE" if sms_fallback_triggered else "WAITING_HUMAN_REVIEW",
+            "channel": "sms" if sms_fallback_triggered else "dashboard",
             "requested_at": now,
             "expires_at": pending.expires_at,
         },

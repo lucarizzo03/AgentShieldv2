@@ -12,6 +12,8 @@ Requires-Dist: redis>=6.4.0
 Requires-Dist: httpx>=0.28.1
 Requires-Dist: pydantic-settings>=2.10.1
 Requires-Dist: alembic>=1.16.5
+Requires-Dist: pyjwt>=2.10.1
+Requires-Dist: python-multipart>=0.0.20
 Provides-Extra: dev
 Requires-Dist: pytest>=8.4.2; extra == "dev"
 Requires-Dist: pytest-asyncio>=1.2.0; extra == "dev"

@@ -62,7 +62,7 @@ class SpendBlockedResponse(BaseModel):
 
 
 class HitlStatePayload(BaseModel):
-    state: Literal["WAITING_HUMAN_TEXT_RESPONSE"]
+    state: Literal["WAITING_HUMAN_REVIEW", "WAITING_HUMAN_TEXT_RESPONSE"]
     channel: Literal["sms", "dashboard"]
     requested_at: datetime
     expires_at: datetime

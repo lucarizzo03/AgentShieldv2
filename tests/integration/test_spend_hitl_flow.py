@@ -1,4 +1,5 @@
 from collections import defaultdict
+from datetime import datetime, timezone
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, select
@@ -7,6 +8,7 @@ from app.db.postgres import engine
 from app.db.redis import get_redis
 from app.main import app
 from app.models import Agent, PendingSpend
+from app.models.dashboard_notification import DashboardNotification
 from app.services.slm.client import LocalSlmClient
 
 
@@ -61,6 +63,9 @@ def _seed_agent(**kwargs) -> None:
         "allowed_destination_addresses": [],
         "blocked_destination_addresses": [],
         "hitl_phone_number": "+15555550100",
+        "hitl_phone_verified_at": None,
+        "hitl_primary_channel": "dashboard",
+        "hitl_sms_fallback_high_risk": True,
     }
     defaults.update(kwargs)
     with Session(engine) as session:
@@ -130,6 +135,12 @@ def test_suspicious_spend_goes_to_hitl_and_approves() -> None:
         )
         assert spend_resp.status_code == 202
         request_id = spend_resp.json()["request_id"]
+        with Session(engine) as session:
+            notif = session.exec(
+                select(DashboardNotification).where(DashboardNotification.request_id == request_id)
+            ).first()
+            assert notif is not None
+            assert notif.status == "OPEN"
         resolve_resp = client.post(
             f"/v1/hitl/resolve/{request_id}",
             headers={"x-webhook-signature": "sig_ok"},
@@ -145,6 +156,11 @@ def test_suspicious_spend_goes_to_hitl_and_approves() -> None:
         pending = session.exec(select(PendingSpend).where(PendingSpend.request_id == request_id)).first()
         assert pending is not None
         assert pending.state == "APPROVED"
+        notif = session.exec(
+            select(DashboardNotification).where(DashboardNotification.request_id == request_id)
+        ).first()
+        assert notif is not None
+        assert notif.status == "RESOLVED"
     app.dependency_overrides.clear()
 
 
@@ -174,5 +190,83 @@ def test_malicious_spend_blocked() -> None:
         )
     assert resp.status_code == 403
     assert resp.json()["status"] == "BLOCKED"
+    app.dependency_overrides.clear()
+
+
+def test_sms_inbound_parser_resolves_pending_request() -> None:
+    _reset_db()
+    _seed_agent(
+        per_txn_auto_approve_limit_cents=1000,
+        hitl_phone_number="+15555550100",
+        hitl_phone_verified_at=datetime.now(timezone.utc),
+    )
+    fake_redis = FakeRedis()
+    app.dependency_overrides[get_redis] = lambda: fake_redis
+    _override_slm("WEAK", 60)
+
+    with TestClient(app) as client:
+        spend_resp = client.post(
+            "/v1/spend-request",
+            headers={"x-agent-key": "local-dev-key"},
+            json={
+                "agent_id": "agent_demo",
+                "declared_goal": "Buy API credits for website launch",
+                "amount_cents": 5000,
+                "currency": "USD",
+                "asset_type": "STABLECOIN",
+                "stablecoin_symbol": "USDC",
+                "network": "base",
+                "destination_address": "0x1234567890abcdef",
+                "vendor_url_or_name": "tempo",
+                "item_description": "Agent credit top-up",
+            },
+        )
+        assert spend_resp.status_code == 202
+        request_id = spend_resp.json()["request_id"]
+        sms_resp = client.post(
+            "/v1/hitl/sms/inbound",
+            headers={"x-webhook-signature": "sig_ok"},
+            data={
+                "From": "+15555550100",
+                "Body": f"APPROVE {request_id}",
+                "MessageSid": "SM123",
+            },
+        )
+    assert sms_resp.status_code == 200
+    assert "APPROVE recorded" in sms_resp.text
+    with Session(engine) as session:
+        pending = session.exec(select(PendingSpend).where(PendingSpend.request_id == request_id)).first()
+        assert pending is not None
+        assert pending.state == "APPROVED"
+    app.dependency_overrides.clear()
+
+
+def test_suspicious_defaults_to_dashboard_when_phone_unverified() -> None:
+    _reset_db()
+    _seed_agent(per_txn_auto_approve_limit_cents=1000, hitl_phone_verified_at=None)
+    fake_redis = FakeRedis()
+    app.dependency_overrides[get_redis] = lambda: fake_redis
+    _override_slm("WEAK", 60)
+
+    with TestClient(app) as client:
+        spend_resp = client.post(
+            "/v1/spend-request",
+            headers={"x-agent-key": "local-dev-key"},
+            json={
+                "agent_id": "agent_demo",
+                "declared_goal": "Buy API credits for website launch",
+                "amount_cents": 5000,
+                "currency": "USD",
+                "asset_type": "STABLECOIN",
+                "stablecoin_symbol": "USDC",
+                "network": "base",
+                "destination_address": "0x1234567890abcdef",
+                "vendor_url_or_name": "tempo",
+                "item_description": "Agent credit top-up",
+            },
+        )
+    assert spend_resp.status_code == 202
+    assert spend_resp.json()["hitl"]["channel"] == "dashboard"
+    assert spend_resp.json()["hitl"]["state"] == "WAITING_HUMAN_REVIEW"
     app.dependency_overrides.clear()
 
