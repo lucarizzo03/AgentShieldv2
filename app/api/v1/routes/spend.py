@@ -214,6 +214,9 @@ async def spend_request(
             "stablecoin_symbol": payload.stablecoin_symbol,
             "network": payload.network,
             "destination_address": payload.destination_address,
+            "quantitative_result": tri.quantitative_result,
+            "policy_result": tri.policy_result,
+            "semantic_result": tri.semantic_result,
             "expires_at": (now + timedelta(seconds=settings.hitl_default_timeout_seconds)).isoformat(),
         },
     )

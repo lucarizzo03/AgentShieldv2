@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlmodel import Session, select
 
 from app.api.v1.schemas.dashboard import (
+    ActivityFeedResponse,
+    DashboardStatsResponse,
     DashboardNotificationAckRequest,
     DashboardNotificationAckResponse,
     DashboardNotificationListResponse,
@@ -13,6 +15,7 @@ from app.core.security import AuthContext, verify_agent_auth
 from app.db.postgres import get_session
 from app.models.agent import Agent
 from app.models.dashboard_notification import DashboardNotification
+from app.models.spend_audit_log import SpendAuditLog
 
 router = APIRouter(tags=["dashboard"])
 
@@ -80,5 +83,87 @@ async def update_dashboard_notification(
         "status": notification.status,
         "acknowledged_by": notification.acknowledged_by,
         "acknowledged_at": notification.acknowledged_at,
+    }
+
+
+@router.get("/dashboard/agents/{agent_id}/activity", response_model=ActivityFeedResponse)
+async def list_agent_activity(
+    agent_id: str,
+    limit: int = Query(default=100, ge=1, le=500),
+    auth_context: AuthContext = Depends(verify_agent_auth),
+    session: Session = Depends(get_session),
+):
+    _ensure_scope(auth_context, agent_id)
+    agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    rows = session.exec(
+        select(SpendAuditLog)
+        .where(SpendAuditLog.agent_id == agent_id)
+        .order_by(SpendAuditLog.created_at.desc())
+        .limit(limit)
+    ).all()
+    return {
+        "agent_id": agent_id,
+        "activity": [
+            {
+                "request_id": row.request_id,
+                "created_at": row.created_at,
+                "status": row.status,
+                "verdict": row.verdict,
+                "vendor_url_or_name": row.vendor_url_or_name,
+                "amount_cents": row.amount_cents,
+                "currency": row.currency,
+                "asset_type": row.asset_type,
+                "network": row.network,
+                "declared_goal": row.declared_goal,
+                "reason": (
+                    (row.semantic_result or {}).get("reason_codes", [None])[0]
+                    if isinstance(row.semantic_result, dict)
+                    else None
+                ),
+                "quantitative_result": row.quantitative_result,
+                "policy_result": row.policy_result,
+                "semantic_result": row.semantic_result,
+            }
+            for row in rows
+        ],
+    }
+
+
+@router.get("/dashboard/agents/{agent_id}/stats", response_model=DashboardStatsResponse)
+async def get_dashboard_stats(
+    agent_id: str,
+    auth_context: AuthContext = Depends(verify_agent_auth),
+    session: Session = Depends(get_session),
+):
+    _ensure_scope(auth_context, agent_id)
+    agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_rows = session.exec(
+        select(SpendAuditLog)
+        .where(SpendAuditLog.agent_id == agent_id)
+        .where(SpendAuditLog.created_at >= day_start)
+    ).all()
+
+    blocked = len([r for r in today_rows if r.status in {"BLOCKED", "DENIED_BY_HUMAN"}])
+    auto_approved = len([r for r in today_rows if r.status == "APPROVED_EXECUTED"])
+    pending_approval = len(
+        session.exec(
+            select(DashboardNotification)
+            .where(DashboardNotification.agent_id == agent_id)
+            .where(DashboardNotification.status == "OPEN")
+        ).all()
+    )
+    return {
+        "agent_id": agent_id,
+        "total_transactions_today": len(today_rows),
+        "blocked": blocked,
+        "pending_approval": pending_approval,
+        "auto_approved": auto_approved,
     }
 

@@ -10,9 +10,15 @@ app/main.py
 app/api/__init__.py
 app/api/v1/__init__.py
 app/api/v1/routes/__init__.py
+app/api/v1/routes/agents.py
+app/api/v1/routes/contact.py
+app/api/v1/routes/dashboard.py
 app/api/v1/routes/hitl.py
 app/api/v1/routes/spend.py
 app/api/v1/schemas/__init__.py
+app/api/v1/schemas/agent.py
+app/api/v1/schemas/contact.py
+app/api/v1/schemas/dashboard.py
 app/api/v1/schemas/hitl.py
 app/api/v1/schemas/spend.py
 app/core/__init__.py
@@ -23,8 +29,11 @@ app/core/security.py
 app/db/__init__.py
 app/db/postgres.py
 app/db/redis.py
+app/migrations/env.py
+app/migrations/versions/20260418_0001_initial_schema.py
 app/models/__init__.py
 app/models/agent.py
+app/models/dashboard_notification.py
 app/models/pending_spend.py
 app/models/spend_audit_log.py
 app/policy/__init__.py
@@ -38,6 +47,7 @@ app/services/__init__.py
 app/services/idempotency.py
 app/services/hitl/__init__.py
 app/services/hitl/notifier.py
+app/services/hitl/otp.py
 app/services/hitl/sms_parser.py
 app/services/hitl/state_manager.py
 app/services/payment/__init__.py

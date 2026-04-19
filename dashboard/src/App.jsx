@@ -1,0 +1,881 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  ArrowUpRight,
+  CheckCircle2,
+  Home,
+  Plus,
+  Settings,
+  ShieldAlert,
+  ShieldCheck,
+} from "lucide-react";
+import {
+  Line,
+  LineChart,
+  ReferenceLine,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
+  createAgent as createAgentRequest,
+  getActivity,
+  getDashboardStats,
+  getNotifications,
+  listAgents,
+  resolveRequest,
+  submitSpendRequest,
+} from "./lib/api";
+
+const emptyChart = [
+  { t: "00:00", v: 0 },
+  { t: "04:00", v: 0 },
+  { t: "08:00", v: 0 },
+  { t: "12:00", v: 0 },
+  { t: "16:00", v: 0 },
+  { t: "20:00", v: 0 },
+  { t: "24:00", v: 0 },
+];
+
+function normalizeStatus(status) {
+  if (status === "PENDING_HITL") return "PENDING";
+  if (status === "BLOCKED") return "BLOCKED";
+  if (status === "APPROVED_BY_HUMAN_EXECUTED") return "APPROVED";
+  if (status === "DENIED_BY_HUMAN") return "DENIED";
+  return "SAFE";
+}
+
+function buildChecklistRows(payload, prefix) {
+  return Object.entries(payload || {}).slice(0, 3).map(([k, v]) => {
+    const ok = typeof v === "boolean" ? v : !String(v).toLowerCase().includes("exceed");
+    return [`${prefix}${k}`, ok ? "✓" : "✗", String(typeof v === "object" ? JSON.stringify(v) : v)];
+  });
+}
+
+const nav = [
+  { key: "overview", label: "Overview", icon: Home },
+  { key: "activity", label: "Activity", icon: Activity },
+  { key: "approvals", label: "Approvals", icon: AlertTriangle, pending: true },
+  { key: "agents", label: "Agents", icon: Plus },
+  { key: "settings", label: "Settings", icon: Settings },
+];
+
+const fx = {
+  safe: { color: "var(--green)", bg: "rgba(0,200,83,0.12)" },
+  pending: { color: "var(--amber)", bg: "rgba(255,149,0,0.14)" },
+  blocked: { color: "var(--red)", bg: "rgba(255,59,48,0.14)" },
+};
+
+function badgeStyle(status) {
+  if (status === "SAFE" || status === "APPROVED") return fx.safe;
+  if (status === "PENDING") return fx.pending;
+  return fx.blocked;
+}
+
+function statusLabel(status) {
+  if (status === "BLOCKED") return "BLOCKED";
+  if (status === "APPROVED") return "SAFE";
+  if (status === "DENIED") return "BLOCKED";
+  return status;
+}
+
+function Timer({ createdAt }) {
+  const [s, setS] = useState(Math.floor((Date.now() - createdAt) / 1000));
+  useEffect(() => {
+    const i = setInterval(() => setS(Math.floor((Date.now() - createdAt) / 1000)), 1000);
+    return () => clearInterval(i);
+  }, [createdAt]);
+  const mins = Math.floor(s / 60);
+  const secs = String(s % 60).padStart(2, "0");
+  const color = s >= 300 ? "var(--red)" : s >= 180 ? "var(--amber)" : "var(--text-2)";
+  return <span style={{ color, fontFamily: "var(--font-mono)", fontSize: 12 }}>{mins}m {secs}s</span>;
+}
+
+function Toasts({ toasts }) {
+  return (
+    <div style={{ position: "fixed", right: 16, bottom: 16, zIndex: 50, display: "flex", flexDirection: "column", gap: 8 }}>
+      {toasts.map((t) => (
+        <div key={t.id} style={{ background: "var(--bg-overlay)", border: "1px solid var(--border-focus)", padding: "10px 12px", fontSize: 12 }}>
+          {t.msg}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function App() {
+  const [agents, setAgents] = useState([]);
+  const [activeAgentId, setActiveAgentId] = useState("");
+  const [stats, setStats] = useState({ total: 0, blocked: 0, pending: 0, approved: 0 });
+  const [rows, setRows] = useState([]);
+  const [approvals, setApprovals] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [page, setPage] = useState("agents");
+  const [filter, setFilter] = useState("All");
+  const [expanded, setExpanded] = useState(null);
+  const [rawOpen, setRawOpen] = useState(null);
+  const [toasts, setToasts] = useState([]);
+  const [showSuccess, setShowSuccess] = useState(false);
+  const [secretReveal, setSecretReveal] = useState(false);
+  const [creds, setCreds] = useState({
+    agentId: "agt_01j9xk2m4p8q3r7s",
+    hmac: "sk_live_a8f3k9q7v1z2t4m6n8",
+  });
+  const [form, setForm] = useState({
+    name: "",
+    daily: "",
+    perTx: "",
+    auto: "",
+    asset: "STABLECOIN",
+    blocked: [],
+    draftVendor: "",
+    networks: ["base"],
+    tokens: ["USDC"],
+  });
+  const [txForm, setTxForm] = useState({
+    declared_goal: "Book travel to NYC conference",
+    amount_usd: "49",
+    vendor_url_or_name: "Delta Airlines",
+    item_description: "Flight booking for August 1",
+    stablecoin_symbol: "USDC",
+    network: "base",
+    destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
+  });
+  const [notes, setNotes] = useState({});
+
+  const pendingCount = approvals.length;
+
+  const filteredRows = useMemo(() => {
+    if (filter === "All") return rows;
+    if (filter === "Safe") return rows.filter((r) => ["SAFE", "APPROVED"].includes(r.status));
+    if (filter === "Suspicious") return rows.filter((r) => ["PENDING", "APPROVED", "DENIED"].includes(r.status));
+    return rows.filter((r) => ["BLOCKED", "DENIED"].includes(r.status));
+  }, [rows, filter]);
+
+  const toast = useCallback((msg) => {
+    const id = `${Date.now()}-${Math.random()}`;
+    setToasts((prev) => [...prev, { id, msg }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3000);
+  }, []);
+
+  const chartData = useMemo(() => {
+    if (rows.length === 0) return emptyChart;
+    const buckets = [0, 4, 8, 12, 16, 20, 24].map((hour) => ({
+      t: `${String(hour).padStart(2, "0")}:00`,
+      v: 0,
+    }));
+    rows.forEach((row) => {
+      const [h] = (row.time || "00:00:00").split(":");
+      const hour = Number(h);
+      const idx = Math.min(6, Math.floor(hour / 4));
+      buckets[idx].v += row.amount;
+    });
+    return buckets;
+  }, [rows]);
+
+  const refresh = useCallback(
+    async (agentId) => {
+      if (!agentId) return;
+      const [statsResp, activityResp, notificationResp] = await Promise.all([
+        getDashboardStats(agentId),
+        getActivity(agentId),
+        getNotifications(agentId),
+      ]);
+      setStats({
+        total: statsResp.total_transactions_today,
+        blocked: statsResp.blocked,
+        pending: statsResp.pending_approval,
+        approved: statsResp.auto_approved,
+      });
+      setRows(
+        activityResp.activity.map((item) => {
+          const slm = item.semantic_result || {};
+          return {
+            id: item.request_id,
+            time: new Date(item.created_at).toLocaleTimeString("en-US", { hour12: false }),
+            status: normalizeStatus(item.status),
+            agent: agentId,
+            vendor: item.vendor_url_or_name,
+            amount: item.amount_cents / 100,
+            asset: item.asset_type === "STABLECOIN" ? item.stablecoin_symbol || "USDC" : item.currency,
+            network: item.network || "n/a",
+            goal: item.declared_goal,
+            reason: item.reason || item.verdict,
+            details: {
+              redis: buildChecklistRows(item.quantitative_result, ""),
+              policy: buildChecklistRows(item.policy_result, ""),
+              slm: {
+                score: Number(slm.risk_score ?? 50) / 100,
+                verdict: slm.alignment_label || item.verdict,
+                reason: (slm.reason_codes || []).join(", ") || "No reason supplied",
+              },
+              raw: {
+                request_id: item.request_id,
+                declared_goal: item.declared_goal,
+                amount_cents: item.amount_cents,
+                currency: item.currency,
+                vendor_url_or_name: item.vendor_url_or_name,
+                network: item.network,
+              },
+            },
+          };
+        })
+      );
+      setApprovals(
+        notificationResp.notifications.map((n) => {
+          const payload = n.payload_json || {};
+          const sem = payload.semantic_result || {};
+          const score = Number(sem.risk_score ?? 50) / 100;
+          return {
+            id: n.id,
+            requestId: n.request_id,
+            createdAt: new Date(n.created_at).getTime(),
+            goal: payload.declared_goal || "No goal provided",
+            action: `Pay $${((payload.amount_cents || 0) / 100).toFixed(2)} ${payload.stablecoin_symbol || payload.currency || "USD"} → ${payload.vendor_url_or_name || "Unknown vendor"}`,
+            meta: `${payload.item_description || "No item"} · ${payload.network || "n/a"} network · ${payload.destination_address || "n/a"}`,
+            slmScore: score,
+            slmVerdict: sem.alignment_label || payload.verdict || "SUSPICIOUS",
+            slmReason: (sem.reason_codes || payload.reasons || []).join(", "),
+            redis: buildChecklistRows(payload.quantitative_result, "").map((r) => `${r[1]} ${r[0]} ${r[2]}`),
+            policy: buildChecklistRows(payload.policy_result, "").map((r) => `${r[1]} ${r[0]} ${r[2]}`),
+          };
+        })
+      );
+    },
+    []
+  );
+
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const data = await listAgents();
+        setAgents(data.agents);
+        if (data.agents.length > 0) {
+          const first = data.agents[0].agent_id;
+          setActiveAgentId(first);
+          setPage("overview");
+          await refresh(first);
+        } else {
+          setPage("agents");
+        }
+      } catch (err) {
+        toast(err.message || "Unable to load agents");
+      } finally {
+        setLoading(false);
+      }
+    };
+    init();
+  }, [refresh, toast]);
+
+  useEffect(() => {
+    if (!activeAgentId) return;
+    const timer = setInterval(() => {
+      refresh(activeAgentId).catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [activeAgentId, refresh]);
+
+  const resolve = (approvalId, decision) => {
+    const ap = approvals.find((a) => String(a.id) === String(approvalId));
+    if (!ap) return;
+    resolveRequest(ap.requestId, decision)
+      .then(() => refresh(activeAgentId))
+      .then(() => {
+        toast(decision === "APPROVE" ? "✓ Approved — agent resuming" : "✕ Denied — funds held");
+      })
+      .catch((err) => toast(err.message || "Resolve failed"));
+  };
+
+  const handleCreateAgent = (e) => {
+    if (loading) return;
+    e.preventDefault();
+    if (!form.name || !form.daily || !form.perTx || !form.auto) return;
+    createAgentRequest({
+      agent_name: form.name,
+      daily_spend_limit_usd: Number(form.daily),
+      per_transaction_limit_usd: Number(form.perTx),
+      auto_approve_under_usd: Number(form.auto),
+      blocked_vendors: form.blocked.length ? form.blocked : ["unknown-vendor"],
+      asset_type: form.asset,
+      allowed_networks: form.networks,
+      allowed_tokens: form.tokens,
+    })
+      .then(async (res) => {
+        setShowSuccess(true);
+        setCreds({ agentId: res.agent_id, hmac: res.hmac_secret });
+        const data = await listAgents();
+        setAgents(data.agents);
+        setActiveAgentId(res.agent_id);
+        await refresh(res.agent_id);
+      })
+      .catch((err) => toast(err.message || "Create agent failed"));
+  };
+
+  const submitLiveSpend = () => {
+    if (!activeAgentId) return;
+    const amountCents = Math.max(1, Math.round(Number(txForm.amount_usd || "0") * 100));
+    submitSpendRequest(activeAgentId, {
+      agent_id: activeAgentId,
+      declared_goal: txForm.declared_goal,
+      amount_cents: amountCents,
+      currency: "USD",
+      vendor_url_or_name: txForm.vendor_url_or_name,
+      item_description: txForm.item_description,
+      asset_type: "STABLECOIN",
+      stablecoin_symbol: txForm.stablecoin_symbol,
+      network: txForm.network,
+      destination_address: txForm.destination_address,
+      idempotency_key: `dash-${Date.now()}`,
+    })
+      .then((res) => {
+        const statusText = res.status || "submitted";
+        toast(`Spend request ${statusText}`);
+      })
+      .then(() => refresh(activeAgentId))
+      .catch((err) => toast(err.message || "Spend request failed"));
+  };
+
+  const addBlockedVendor = () => {
+    const v = form.draftVendor.trim();
+    if (!v) return;
+    setForm((p) => ({ ...p, blocked: Array.from(new Set([...p.blocked, v])), draftVendor: "" }));
+  };
+
+  const pageTitle = page.charAt(0).toUpperCase() + page.slice(1);
+
+  return (
+    <div style={{ display: "flex", height: "100vh", width: "100vw", overflow: "hidden", background: "var(--bg)" }}>
+      <style>{`
+        :root {
+          --bg: #0c0c0c;
+          --bg-raised: #111111;
+          --bg-overlay: #161616;
+          --border: #222222;
+          --border-focus: #333333;
+          --text-1: #ededed;
+          --text-2: #888888;
+          --text-3: #444444;
+          --amber: #FF9500;
+          --green: #00C853;
+          --red: #FF3B30;
+          --blue: #0A84FF;
+          --font-sans: "Geist", "IBM Plex Sans", sans-serif;
+          --font-mono: "Geist Mono", "IBM Plex Mono", monospace;
+        }
+        * { box-sizing: border-box; }
+        .cell { border-bottom: 1px solid var(--border); }
+        .fast { transition: all 100ms ease; }
+        .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        button.fast:hover, .fast:hover {
+          border-color: var(--border-focus) !important;
+          background: var(--bg-overlay);
+        }
+        .dotPulse {
+          width: 6px; height: 6px; border-radius: 999px; background: var(--amber);
+          animation: dotPulse 1.1s infinite;
+        }
+        @keyframes dotPulse {
+          0% { opacity: .35; transform: scale(.8); }
+          50% { opacity: 1; transform: scale(1); }
+          100% { opacity: .35; transform: scale(.8); }
+        }
+      `}</style>
+
+      <aside style={{ width: 200, borderRight: "1px solid var(--border)", background: "var(--bg)", display: "flex", flexDirection: "column" }}>
+        <div style={{ padding: "12px 16px", borderBottom: "1px solid var(--border)", fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text-1)", fontWeight: 500 }}>
+          AgentShield
+        </div>
+        <div style={{ padding: "10px 16px", borderBottom: "1px solid var(--border)", fontSize: 12, color: "var(--text-2)" }}>
+          {agents.find((a) => a.agent_id === activeAgentId)?.display_name || "no-agent-selected"}
+        </div>
+        <nav style={{ paddingTop: 4, flex: 1 }}>
+          {nav.map((n) => {
+            const Icon = n.icon;
+            const active = page === n.key;
+            return (
+              <button
+                key={n.key}
+                onClick={() => setPage(n.key)}
+                style={{
+                  width: "100%",
+                  height: 34,
+                  border: "none",
+                  borderLeft: active ? "2px solid var(--text-1)" : "2px solid transparent",
+                  background: active ? "var(--bg-raised)" : "transparent",
+                  color: active ? "var(--text-1)" : "var(--text-2)",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  paddingLeft: 16,
+                  fontSize: 13,
+                  cursor: "pointer",
+                  fontFamily: "var(--font-sans)",
+                }}
+                className="fast"
+              >
+                <span style={{ display: "inline-flex", width: 14, alignItems: "center", justifyContent: "center" }}>
+                  <Icon size={13} />
+                </span>
+                <span style={{ lineHeight: "14px" }}>{n.label}</span>
+                {n.pending && pendingCount > 0 ? (
+                  <span style={{ marginLeft: "auto", marginRight: 12, width: 6, height: 6, borderRadius: 999, background: "var(--amber)" }} />
+                ) : null}
+              </button>
+            );
+          })}
+        </nav>
+        <div style={{ padding: "10px 16px", borderTop: "1px solid var(--border)", fontSize: 11, color: "var(--green)", fontFamily: "var(--font-mono)" }}>
+          ● API Operational
+        </div>
+      </aside>
+
+      <main style={{ flex: 1, overflowY: "auto", background: "var(--bg)" }}>
+        <header style={{ height: 48, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px" }}>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text-1)" }}>{pageTitle}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            {activeAgentId ? (
+              <select
+                value={activeAgentId}
+                onChange={(e) => {
+                  setActiveAgentId(e.target.value);
+                  refresh(e.target.value).catch(() => {});
+                }}
+                style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-2)", height: 28, fontSize: 12, padding: "0 8px", fontFamily: "var(--font-mono)" }}
+              >
+                {agents.map((a) => (
+                  <option key={a.agent_id} value={a.agent_id}>
+                    {a.display_name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            <div style={{ fontSize: 12, color: "var(--text-2)" }}>{page === "activity" ? "↑ Export" : ""}</div>
+          </div>
+        </header>
+
+        <section style={{ padding: 24 }}>
+          {page === "overview" ? (
+            <>
+              <div style={{ border: "1px solid var(--border)", padding: 10, marginBottom: 10 }}>
+                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>Submit Live Spend Request</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.6fr 1fr", gap: 8, marginBottom: 8 }}>
+                  <input
+                    value={txForm.declared_goal}
+                    onChange={(e) => setTxForm((p) => ({ ...p, declared_goal: e.target.value }))}
+                    placeholder="declared goal"
+                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
+                  />
+                  <input
+                    value={txForm.amount_usd}
+                    onChange={(e) => setTxForm((p) => ({ ...p, amount_usd: e.target.value }))}
+                    placeholder="amount USD"
+                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
+                  />
+                  <input
+                    value={txForm.vendor_url_or_name}
+                    onChange={(e) => setTxForm((p) => ({ ...p, vendor_url_or_name: e.target.value }))}
+                    placeholder="vendor"
+                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
+                  />
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 130px 130px", gap: 8, marginBottom: 8 }}>
+                  <input
+                    value={txForm.item_description}
+                    onChange={(e) => setTxForm((p) => ({ ...p, item_description: e.target.value }))}
+                    placeholder="item description"
+                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
+                  />
+                  <select
+                    value={txForm.stablecoin_symbol}
+                    onChange={(e) => setTxForm((p) => ({ ...p, stablecoin_symbol: e.target.value }))}
+                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-2)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
+                  >
+                    <option value="USDC">USDC</option>
+                    <option value="USDT">USDT</option>
+                  </select>
+                  <select
+                    value={txForm.network}
+                    onChange={(e) => setTxForm((p) => ({ ...p, network: e.target.value }))}
+                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-2)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
+                  >
+                    <option value="base">base</option>
+                    <option value="ethereum">ethereum</option>
+                    <option value="polygon">polygon</option>
+                    <option value="arbitrum">arbitrum</option>
+                    <option value="solana">solana</option>
+                  </select>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
+                  <input
+                    value={txForm.destination_address}
+                    onChange={(e) => setTxForm((p) => ({ ...p, destination_address: e.target.value }))}
+                    placeholder="destination address"
+                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
+                  />
+                  <button
+                    onClick={submitLiveSpend}
+                    style={{ height: 30, border: "1px solid var(--text-1)", background: "var(--text-1)", color: "var(--bg)", fontFamily: "var(--font-mono)", fontSize: 12, padding: "0 10px", cursor: "pointer" }}
+                  >
+                    Submit Request
+                  </button>
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
+                {[
+                  ["transactions", stats.total, "today", "var(--text-1)"],
+                  ["blocked", stats.blocked, "", "var(--red)"],
+                  ["pending", stats.pending, "", "var(--amber)"],
+                  ["approved", stats.approved, "", "var(--green)"],
+                ].map(([label, value, sub, color]) => (
+                  <div key={label} style={{ border: "1px solid var(--border)", padding: 10 }}>
+                    <div style={{ fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</div>
+                    <div style={{ marginTop: 8, fontSize: 26, lineHeight: 1, color, fontFamily: "var(--font-mono)", fontWeight: 600 }}>{value}</div>
+                    <div style={{ marginTop: 3, fontSize: 11, color: "var(--text-3)" }}>{sub}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ marginTop: 16, border: "1px solid var(--border)", padding: 12 }}>
+                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>Spend Activity</div>
+                <div style={{ height: 220 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={chartData}>
+                      <XAxis dataKey="t" tick={{ fill: "var(--text-3)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: "var(--text-3)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <Tooltip contentStyle={{ background: "var(--bg-overlay)", border: "1px solid var(--border)" }} />
+                      <ReferenceLine y={0} stroke="var(--border)" strokeWidth={1} />
+                      <Line dataKey="v" stroke="var(--text-1)" strokeWidth={1.5} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 16, border: "1px solid var(--border)" }}>
+                <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border)", fontSize: 12, color: "var(--text-2)" }}>Recent Activity</div>
+                {rows.slice(0, 5).map((r) => (
+                  <div key={r.id} className="cell" style={{ display: "grid", gridTemplateColumns: "100px 120px 1fr 120px 100px", alignItems: "center", height: 36, padding: "0 12px", fontSize: 12 }}>
+                    <div style={{ fontFamily: "var(--font-mono)", color: "var(--text-2)" }}>{r.time}</div>
+                    <div>{r.vendor}</div>
+                    <div className="ellipsis" style={{ color: "var(--text-2)", fontStyle: "italic" }}>{r.goal}</div>
+                    <div style={{ fontFamily: "var(--font-mono)", textAlign: "right" }}>${r.amount.toFixed(2)}</div>
+                    <div style={{ color: "var(--text-3)", textAlign: "right" }}>{r.network}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+
+          {page === "activity" ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <div style={{ display: "flex", gap: 14, fontSize: 12 }}>
+                  {["All", "Safe", "Suspicious", "Blocked"].map((f) => (
+                    <button
+                      key={f}
+                      onClick={() => setFilter(f)}
+                      style={{
+                        border: "none",
+                        borderBottom: filter === f ? "1px solid var(--text-1)" : "1px solid transparent",
+                        background: "transparent",
+                        color: filter === f ? "var(--text-1)" : "var(--text-2)",
+                        paddingBottom: 5,
+                        lineHeight: "14px",
+                        cursor: "pointer",
+                        fontSize: 12,
+                      }}
+                    >
+                      {f}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 12, color: "var(--text-2)" }}>↑ Export</div>
+              </div>
+              <div style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "82px 92px 112px 1fr 116px 78px 1fr 20px", padding: "6px 12px", fontSize: 11, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+                  <div>Time</div><div>Status</div><div>Agent</div><div>Vendor</div><div style={{ textAlign: "right" }}>Amount</div><div>Network</div><div>Goal</div><div />
+                </div>
+                {filteredRows.map((r) => {
+                  const b = badgeStyle(r.status);
+                  const open = expanded === r.id;
+                  return (
+                    <div key={r.id} style={{ borderTop: "1px solid var(--border)" }}>
+                      <div
+                        onClick={() => setExpanded((p) => (p === r.id ? null : r.id))}
+                        style={{ display: "grid", gridTemplateColumns: "82px 92px 112px 1fr 116px 78px 1fr 20px", alignItems: "center", minHeight: 36, padding: "0 12px", fontSize: 12, cursor: "pointer", background: open ? "var(--bg-raised)" : "transparent" }}
+                        className="fast"
+                      >
+                        <div style={{ fontFamily: "var(--font-mono)", color: "var(--text-2)" }}>{r.time}</div>
+                        <div>
+                          <span style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "2px 6px", fontSize: 10, borderRadius: 3, color: b.color, background: b.bg, textTransform: "uppercase", fontFamily: "var(--font-mono)" }}>
+                            {r.status === "PENDING" ? <span className="dotPulse" /> : null}
+                            {statusLabel(r.status)}
+                          </span>
+                        </div>
+                        <div className="ellipsis" style={{ color: "var(--text-2)" }}>{r.agent}</div>
+                        <div className="ellipsis" style={{ color: "var(--text-1)", fontSize: 13 }}>{r.vendor}</div>
+                        <div style={{ textAlign: "right", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                          ${r.amount.toFixed(2)} <span style={{ color: "var(--text-3)", fontSize: 11 }}>{r.asset}</span>
+                        </div>
+                        <div style={{ color: "var(--text-3)", fontSize: 11 }}>{r.network}</div>
+                        <div className="ellipsis" style={{ color: "var(--text-2)", fontStyle: "italic" }}>{r.goal}</div>
+                        <div style={{ color: open ? "var(--text-1)" : "var(--text-3)" }}>→</div>
+                      </div>
+
+                      {open ? (
+                        <div style={{ background: "var(--bg-raised)", borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)", padding: 10, display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 10 }}>
+                          <div style={{ fontSize: 12 }}>
+                            <div style={{ color: "var(--text-2)", fontSize: 11, marginBottom: 6 }}>Check A · Redis</div>
+                            {r.details.redis.map(([k, s, v]) => <div key={k} style={{ display: "grid", gridTemplateColumns: "140px 20px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>{k}</span><span>{s}</span><span>{v}</span></div>)}
+                            <div style={{ color: "var(--text-2)", fontSize: 11, margin: "6px 0 6px" }}>Check B · Policy</div>
+                            {r.details.policy.map(([k, s, v]) => <div key={k} style={{ display: "grid", gridTemplateColumns: "140px 20px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>{k}</span><span>{s}</span><span>{v}</span></div>)}
+                            <div style={{ color: "var(--text-2)", fontSize: 11, margin: "6px 0 6px" }}>Check C · SLM</div>
+                            <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>alignment score</span><span>{r.details.slm.score}</span></div>
+                            <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>verdict</span><span>{r.details.slm.verdict}</span></div>
+                            <div style={{ display: "grid", gridTemplateColumns: "140px 1fr" }}><span style={{ color: "var(--text-2)" }}>reason</span><span>{r.details.slm.reason}</span></div>
+                          </div>
+                          <div>
+                            <button onClick={() => setRawOpen((p) => (p === r.id ? null : r.id))} style={{ background: "transparent", border: "none", color: "var(--text-2)", fontSize: 11, cursor: "pointer", padding: 0 }}>
+                              {"{ } Raw Request"}
+                            </button>
+                            {rawOpen === r.id ? (
+                              <pre style={{ marginTop: 8, background: "var(--bg-overlay)", border: "1px solid var(--border)", padding: 8, fontFamily: "var(--font-mono)", fontSize: 11, overflow: "auto" }}>
+                                {JSON.stringify(r.details.raw, null, 2)}
+                              </pre>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : null}
+
+          {page === "approvals" ? (
+            approvals.length === 0 ? (
+              <div style={{ display: "grid", placeItems: "center", minHeight: 460, textAlign: "center" }}>
+                <ShieldCheck size={32} color="var(--text-3)" />
+                <div style={{ marginTop: 8, fontSize: 14, color: "var(--text-1)" }}>No pending approvals</div>
+                <div style={{ marginTop: 4, fontSize: 12, color: "var(--text-2)" }}>All agent activity is within policy</div>
+              </div>
+            ) : (
+              <>
+                <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
+                  <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)" }}>Approvals</div>
+                  <span style={{ fontSize: 11, color: "var(--amber)", border: "1px solid var(--border)", background: "rgba(255,149,0,0.14)", padding: "2px 6px" }}>{approvals.length} pending</span>
+                </div>
+                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                  Transactions paused for human review. Agent is waiting.
+                </div>
+                <div style={{ display: "grid", gap: 8 }}>
+                  {approvals.map((a) => {
+                    const barColor = a.slmScore < 0.4 ? "var(--red)" : a.slmScore < 0.7 ? "var(--amber)" : "var(--green)";
+                    return (
+                      <div key={a.id} style={{ border: "1px solid var(--border)", background: "var(--bg-raised)" }} className="fast">
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderBottom: "1px solid var(--border)", background: "var(--bg-overlay)", fontSize: 12 }}>
+                          <span style={{ color: "var(--text-1)", fontFamily: "var(--font-mono)" }}>PENDING APPROVAL</span>
+                          <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                            <Timer createdAt={a.createdAt} />
+                            <ShieldAlert size={14} color="var(--amber)" />
+                          </span>
+                        </div>
+                        <div style={{ padding: 10, fontSize: 12 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr", marginBottom: 8 }}>
+                            <span style={{ color: "var(--text-2)" }}>Goal</span><span>{a.goal}</span>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr", marginBottom: 8 }}>
+                            <span style={{ color: "var(--text-2)" }}>Action</span>
+                            <div>
+                              <div>{a.action}</div>
+                              <div style={{ marginTop: 3, color: "var(--text-2)", fontSize: 11, fontFamily: "var(--font-mono)" }}>{a.meta}</div>
+                            </div>
+                          </div>
+                        </div>
+                        <div style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)", padding: 10, fontSize: 12 }}>
+                          <div style={{ color: "var(--text-2)", marginBottom: 8 }}>SIGNALS</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr", marginBottom: 8 }}>
+                            <span style={{ color: "var(--text-2)" }}>SLM Score</span>
+                            <div>
+                              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                                <span>{a.slmScore.toFixed(2)}</span><span>{a.slmVerdict}</span>
+                              </div>
+                              <div style={{ height: 2, background: "var(--border)", marginBottom: 6 }}>
+                                <div style={{ width: `${a.slmScore * 100}%`, height: "100%", background: barColor }} />
+                              </div>
+                              <div style={{ color: "var(--text-2)" }}>{a.slmReason}</div>
+                            </div>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr", marginBottom: 8 }}>
+                            <span style={{ color: "var(--text-2)" }}>Redis</span>
+                            <div>{a.redis.map((s) => <div key={s}>{s}</div>)}</div>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr" }}>
+                            <span style={{ color: "var(--text-2)" }}>Policy</span>
+                            <div>{a.policy.map((s) => <div key={s}>{s}</div>)}</div>
+                          </div>
+                        </div>
+                        <div style={{ padding: 10 }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr", marginBottom: 8 }}>
+                            <span style={{ color: "var(--text-2)" }}>Note</span>
+                            <input
+                              value={notes[a.id] || ""}
+                              onChange={(e) => setNotes((p) => ({ ...p, [a.id]: e.target.value }))}
+                              style={{ height: 28, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text-1)", padding: "0 8px", fontSize: 12 }}
+                            />
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "space-between" }}>
+                            <button
+                              onClick={() => resolve(a.id, "APPROVE")}
+                              style={{ height: 30, padding: "0 12px", border: "1px solid var(--green)", background: "var(--green)", color: "var(--bg)", fontFamily: "var(--font-mono)", fontSize: 12, cursor: "pointer" }}
+                              className="fast"
+                            >
+                              ✓ Approve
+                            </button>
+                            <button
+                              onClick={() => resolve(a.id, "DENY")}
+                              style={{ height: 30, padding: "0 12px", border: "1px solid transparent", background: "transparent", color: "var(--red)", fontFamily: "var(--font-mono)", fontSize: 12, cursor: "pointer" }}
+                              className="fast"
+                            >
+                              ✕ Deny
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )
+          ) : null}
+
+          {page === "agents" ? (
+            <div style={{ maxWidth: 560 }}>
+              <div style={{ marginBottom: 12, fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)" }}>Register Agent</div>
+              {!showSuccess ? (
+                <form onSubmit={handleCreateAgent}>
+                  {[
+                    ["Agent Name", "name", "my-booking-agent"],
+                    ["Daily Spend Limit", "daily", ""],
+                    ["Per-Transaction Limit", "perTx", ""],
+                    ["Auto-Approve Under", "auto", ""],
+                  ].map(([label, key, ph]) => (
+                    <div key={key} style={{ marginBottom: 12 }}>
+                      <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</label>
+                      <input
+                        value={form[key]}
+                        placeholder={ph}
+                        onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
+                        style={{ width: "100%", height: 36, background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-1)", borderRadius: 4, padding: "0 12px", fontSize: 13, fontFamily: "var(--font-mono)" }}
+                        className="fast"
+                      />
+                    </div>
+                  ))}
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Asset Type</label>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {["STABLECOIN", "FIAT"].map((asset) => (
+                        <button key={asset} type="button" onClick={() => setForm((p) => ({ ...p, asset }))} style={{ height: 30, padding: "0 10px", border: "1px solid var(--border)", background: form.asset === asset ? "var(--bg-overlay)" : "var(--bg-raised)", color: "var(--text-1)", borderRadius: 4, fontSize: 12, fontFamily: "var(--font-mono)" }}>
+                          {asset}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {form.asset === "STABLECOIN" ? (
+                    <>
+                      <div style={{ marginBottom: 12 }}>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Networks</label>
+                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12, color: "var(--text-2)" }}>
+                          {["ethereum", "base", "solana", "polygon", "arbitrum"].map((n) => (
+                            <label key={n} style={{ display: "inline-flex", gap: 6, alignItems: "center", textTransform: "lowercase" }}>
+                              <input type="checkbox" checked={form.networks.includes(n)} onChange={() => setForm((p) => ({ ...p, networks: p.networks.includes(n) ? p.networks.filter((x) => x !== n) : [...p.networks, n] }))} />
+                              {n}
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                      <div style={{ marginBottom: 12 }}>
+                        <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Tokens</label>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          {["USDC", "USDT"].map((t) => (
+                            <button key={t} type="button" onClick={() => setForm((p) => ({ ...p, tokens: p.tokens.includes(t) ? p.tokens.filter((x) => x !== t) : [...p.tokens, t] }))} style={{ height: 28, padding: "0 10px", border: "1px solid var(--border)", background: form.tokens.includes(t) ? "var(--bg-overlay)" : "var(--bg-raised)", color: "var(--text-1)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 11 }}>
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  ) : null}
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Blocked Vendors</label>
+                    <input
+                      value={form.draftVendor}
+                      onChange={(e) => setForm((p) => ({ ...p, draftVendor: e.target.value }))}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addBlockedVendor(); } }}
+                      style={{ width: "100%", height: 36, background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-1)", borderRadius: 4, padding: "0 12px", fontSize: 13, fontFamily: "var(--font-mono)" }}
+                      className="fast"
+                    />
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
+                      {form.blocked.map((v) => (
+                        <button key={v} type="button" onClick={() => setForm((p) => ({ ...p, blocked: p.blocked.filter((x) => x !== v) }))} style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-2)", borderRadius: 4, fontSize: 11, fontFamily: "var(--font-mono)", padding: "3px 6px" }}>
+                          {v} ×
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <button type="submit" style={{ height: 36, padding: "0 16px", border: "1px solid var(--text-1)", background: "var(--text-1)", color: "var(--bg)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
+                    Create Agent
+                  </button>
+                </form>
+              ) : (
+                <div>
+                  <div style={{ fontSize: 14, color: "var(--text-1)", fontFamily: "var(--font-mono)", fontWeight: 500, marginBottom: 10 }}>Agent created.</div>
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>agent_id</div>
+                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                      <span>{creds.agentId}</span>
+                      <button onClick={() => navigator.clipboard.writeText(creds.agentId)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
+                    </div>
+                  </div>
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>hmac_secret</div>
+                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                      <span>{secretReveal ? creds.hmac : "•••••••••••••••••••••••••••"}</span>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button onClick={() => navigator.clipboard.writeText(creds.hmac)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
+                        <button onClick={() => setSecretReveal((p) => !p)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[reveal]</button>
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Integration</div>
+                  <div style={{ border: "1px solid var(--border)", background: "var(--bg-overlay)", padding: "8px 10px", fontFamily: "var(--font-mono)", fontSize: 12, position: "relative" }}>
+                    <button onClick={() => navigator.clipboard.writeText(`curl -X POST https://api.agentshield.com/v1/spend-request -H "x-agent-id: ${creds.agentId}" -H "x-signature: <hmac>" -d '{"declared_goal":"...","amount_cents":4900}'`)} style={{ position: "absolute", right: 8, top: 8, border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
+                    <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{`curl -X POST \\
+  https://api.agentshield.com/v1/spend-request \\
+  -H "x-agent-id: ${creds.agentId}" \\
+  -H "x-signature: <hmac>" \\
+  -d '{"declared_goal":"...","amount_cents":4900}'`}</pre>
+                  </div>
+                  <button onClick={() => setPage("activity")} style={{ marginTop: 10, border: "none", background: "transparent", color: "var(--text-2)", fontSize: 12, cursor: "pointer" }}>
+                    → View Activity
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {page === "settings" ? (
+            <div style={{ border: "1px solid var(--border)", padding: 12, fontSize: 12, color: "var(--text-2)" }}>
+              Settings coming soon.
+            </div>
+          ) : null}
+        </section>
+      </main>
+      <Toasts toasts={toasts} />
+    </div>
+  );
+}
+
