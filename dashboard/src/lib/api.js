@@ -78,3 +78,17 @@ export async function submitSpendRequest(agentId, payload) {
   });
 }
 
+export async function bootstrapOnboarding(payload) {
+  return request("/onboarding/bootstrap", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getOnboardingChecklist(agentId) {
+  return request(`/onboarding/agents/${agentId}/checklist`, {
+    headers: authHeaders(agentId),
+  });
+}
+

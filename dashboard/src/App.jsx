@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   ArrowUpRight,
   CheckCircle2,
+  Clock3,
   Home,
   Plus,
   Settings,
@@ -20,10 +21,12 @@ import {
   YAxis,
 } from "recharts";
 import {
+  bootstrapOnboarding,
   createAgent as createAgentRequest,
   getActivity,
   getDashboardStats,
   getNotifications,
+  getOnboardingChecklist,
   listAgents,
   resolveRequest,
   submitSpendRequest,
@@ -55,6 +58,7 @@ function buildChecklistRows(payload, prefix) {
 }
 
 const nav = [
+  { key: "quickstart", label: "Quickstart", icon: Clock3 },
   { key: "overview", label: "Overview", icon: Home },
   { key: "activity", label: "Activity", icon: Activity },
   { key: "approvals", label: "Approvals", icon: AlertTriangle, pending: true },
@@ -134,6 +138,12 @@ export default function App() {
     networks: ["base"],
     tokens: ["USDC"],
   });
+  const [quickstartForm, setQuickstartForm] = useState({
+    userName: "",
+    email: "",
+    agentName: "",
+  });
+  const [checklist, setChecklist] = useState(null);
   const [txForm, setTxForm] = useState({
     declared_goal: "Book travel to NYC conference",
     amount_usd: "49",
@@ -247,6 +257,19 @@ export default function App() {
     []
   );
 
+  const refreshChecklist = useCallback(
+    async (agentId) => {
+      if (!agentId) return;
+      try {
+        const data = await getOnboardingChecklist(agentId);
+        setChecklist(data);
+      } catch {
+        // checklist is best-effort for UX; ignore errors
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     const init = async () => {
       try {
@@ -255,10 +278,11 @@ export default function App() {
         if (data.agents.length > 0) {
           const first = data.agents[0].agent_id;
           setActiveAgentId(first);
-          setPage("overview");
+          setPage("quickstart");
           await refresh(first);
+          await refreshChecklist(first);
         } else {
-          setPage("agents");
+          setPage("quickstart");
         }
       } catch (err) {
         toast(err.message || "Unable to load agents");
@@ -273,15 +297,17 @@ export default function App() {
     if (!activeAgentId) return;
     const timer = setInterval(() => {
       refresh(activeAgentId).catch(() => {});
+      refreshChecklist(activeAgentId).catch(() => {});
     }, 5000);
     return () => clearInterval(timer);
-  }, [activeAgentId, refresh]);
+  }, [activeAgentId, refresh, refreshChecklist]);
 
   const resolve = (approvalId, decision) => {
     const ap = approvals.find((a) => String(a.id) === String(approvalId));
     if (!ap) return;
     resolveRequest(ap.requestId, decision)
       .then(() => refresh(activeAgentId))
+      .then(() => refreshChecklist(activeAgentId))
       .then(() => {
         toast(decision === "APPROVE" ? "✓ Approved — agent resuming" : "✕ Denied — funds held");
       })
@@ -313,6 +339,82 @@ export default function App() {
       .catch((err) => toast(err.message || "Create agent failed"));
   };
 
+  const runQuickstartBootstrap = (e) => {
+    e.preventDefault();
+    if (!quickstartForm.userName || !quickstartForm.email || !quickstartForm.agentName) {
+      toast("Enter name, email, and agent name");
+      return;
+    }
+    bootstrapOnboarding({
+      user_name: quickstartForm.userName,
+      email: quickstartForm.email,
+      agent_name: quickstartForm.agentName,
+      daily_spend_limit_usd: 500,
+      per_transaction_limit_usd: 100,
+      auto_approve_under_usd: 25,
+      allowed_networks: ["base"],
+      allowed_tokens: ["USDC"],
+      blocked_vendors: ["badvendor.example"],
+    })
+      .then(async (res) => {
+        setShowSuccess(true);
+        setCreds({ agentId: res.agent_id, hmac: res.hmac_secret });
+        const data = await listAgents();
+        setAgents(data.agents);
+        setActiveAgentId(res.agent_id);
+        await refresh(res.agent_id);
+        await refreshChecklist(res.agent_id);
+        setPage("quickstart");
+        toast("Quickstart bootstrap complete");
+      })
+      .catch((err) => toast(err.message || "Bootstrap failed"));
+  };
+
+  const runSafeTest = () => {
+    if (!activeAgentId) return;
+    submitSpendRequest(activeAgentId, {
+      agent_id: activeAgentId,
+      declared_goal: "Book flight to NYC conference",
+      amount_cents: 2400,
+      currency: "USD",
+      vendor_url_or_name: "Delta Airlines",
+      item_description: "Seat reservation",
+      asset_type: "STABLECOIN",
+      stablecoin_symbol: "USDC",
+      network: "base",
+      destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
+      idempotency_key: `quick-safe-${Date.now()}`,
+    })
+      .then(() => refresh(activeAgentId))
+      .then(() => refreshChecklist(activeAgentId))
+      .then(() => toast("SAFE test submitted"))
+      .catch((err) => toast(err.message || "SAFE test failed"));
+  };
+
+  const runSuspiciousTest = () => {
+    if (!activeAgentId) return;
+    submitSpendRequest(activeAgentId, {
+      agent_id: activeAgentId,
+      declared_goal: "Book flight to NYC conference",
+      amount_cents: 8900,
+      currency: "USD",
+      vendor_url_or_name: "Uber Eats",
+      item_description: "Large dinner order",
+      asset_type: "STABLECOIN",
+      stablecoin_symbol: "USDC",
+      network: "base",
+      destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
+      idempotency_key: `quick-suspicious-${Date.now()}`,
+    })
+      .then(() => refresh(activeAgentId))
+      .then(() => refreshChecklist(activeAgentId))
+      .then(() => {
+        setPage("approvals");
+        toast("Suspicious HITL test submitted");
+      })
+      .catch((err) => toast(err.message || "Suspicious test failed"));
+  };
+
   const submitLiveSpend = () => {
     if (!activeAgentId) return;
     const amountCents = Math.max(1, Math.round(Number(txForm.amount_usd || "0") * 100));
@@ -334,6 +436,7 @@ export default function App() {
         toast(`Spend request ${statusText}`);
       })
       .then(() => refresh(activeAgentId))
+      .then(() => refreshChecklist(activeAgentId))
       .catch((err) => toast(err.message || "Spend request failed"));
   };
 
@@ -441,6 +544,7 @@ export default function App() {
                 onChange={(e) => {
                   setActiveAgentId(e.target.value);
                   refresh(e.target.value).catch(() => {});
+                  refreshChecklist(e.target.value).catch(() => {});
                 }}
                 style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-2)", height: 28, fontSize: 12, padding: "0 8px", fontFamily: "var(--font-mono)" }}
               >
@@ -456,6 +560,100 @@ export default function App() {
         </header>
 
         <section style={{ padding: 24 }}>
+          {page === "quickstart" ? (
+            <div style={{ maxWidth: 780 }}>
+              <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)", marginBottom: 8 }}>
+                  5-Minute Onboarding
+                </div>
+                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
+                  Create your first agent, run one SAFE and one HITL test, then approve once.
+                </div>
+                <form onSubmit={runQuickstartBootstrap} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 8 }}>
+                  <input
+                    value={quickstartForm.userName}
+                    onChange={(e) => setQuickstartForm((p) => ({ ...p, userName: e.target.value }))}
+                    placeholder="your name"
+                    style={{ height: 32, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
+                  />
+                  <input
+                    value={quickstartForm.email}
+                    onChange={(e) => setQuickstartForm((p) => ({ ...p, email: e.target.value }))}
+                    placeholder="email"
+                    style={{ height: 32, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
+                  />
+                  <input
+                    value={quickstartForm.agentName}
+                    onChange={(e) => setQuickstartForm((p) => ({ ...p, agentName: e.target.value }))}
+                    placeholder="agent name"
+                    style={{ height: 32, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
+                  />
+                  <button
+                    type="submit"
+                    style={{ height: 32, border: "1px solid var(--text-1)", background: "var(--text-1)", color: "var(--bg)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 12, cursor: "pointer" }}
+                  >
+                    Bootstrap
+                  </button>
+                </form>
+              </div>
+
+              {activeAgentId ? (
+                <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
+                  <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>Quick Validation</div>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                    <button
+                      onClick={runSafeTest}
+                      style={{ height: 30, border: "1px solid var(--green)", background: "rgba(0,200,83,0.12)", color: "var(--green)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
+                    >
+                      Run SAFE Test
+                    </button>
+                    <button
+                      onClick={runSuspiciousTest}
+                      style={{ height: 30, border: "1px solid var(--amber)", background: "rgba(255,149,0,0.12)", color: "var(--amber)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
+                    >
+                      Run HITL Test
+                    </button>
+                    <button
+                      onClick={() => refreshChecklist(activeAgentId)}
+                      style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-2)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
+                    >
+                      Refresh Checklist
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
+                    active_agent: {activeAgentId}
+                  </div>
+                </div>
+              ) : null}
+
+              <div style={{ border: "1px solid var(--border)", padding: 12 }}>
+                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>Readiness</div>
+                {checklist ? (
+                  <>
+                    {[
+                      ["Agent created", checklist.agent_created],
+                      ["First SAFE transaction executed", checklist.first_safe_executed],
+                      ["One HITL pending request created", checklist.pending_hitl_created],
+                      ["One HITL request resolved", checklist.human_resolution_done],
+                    ].map(([label, ok]) => (
+                      <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                        <span style={{ fontSize: 12, color: "var(--text-1)" }}>{label}</span>
+                        <span style={{ fontSize: 11, color: ok ? "var(--green)" : "var(--amber)", fontFamily: "var(--font-mono)" }}>
+                          {ok ? "DONE" : "PENDING"}
+                        </span>
+                      </div>
+                    ))}
+                    <div style={{ marginTop: 10, fontSize: 12, color: checklist.ready_for_live ? "var(--green)" : "var(--text-2)", fontFamily: "var(--font-mono)" }}>
+                      {checklist.ready_for_live ? "READY FOR LIVE AGENT TRAFFIC" : "Complete the checklist to go live"}
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: "var(--text-3)" }}>No checklist yet. Bootstrap an agent first.</div>
+                )}
+              </div>
+            </div>
+          ) : null}
+
           {page === "overview" ? (
             <>
               <div style={{ border: "1px solid var(--border)", padding: 10, marginBottom: 10 }}>

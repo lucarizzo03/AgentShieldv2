@@ -14,12 +14,14 @@ app/api/v1/routes/agents.py
 app/api/v1/routes/contact.py
 app/api/v1/routes/dashboard.py
 app/api/v1/routes/hitl.py
+app/api/v1/routes/onboarding.py
 app/api/v1/routes/spend.py
 app/api/v1/schemas/__init__.py
 app/api/v1/schemas/agent.py
 app/api/v1/schemas/contact.py
 app/api/v1/schemas/dashboard.py
 app/api/v1/schemas/hitl.py
+app/api/v1/schemas/onboarding.py
 app/api/v1/schemas/spend.py
 app/core/__init__.py
 app/core/config.py
