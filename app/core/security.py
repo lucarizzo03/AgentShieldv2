@@ -6,8 +6,11 @@ from typing import Any
 
 import jwt
 from fastapi import Header, HTTPException, Request, status
+from sqlmodel import Session, select
 
 from app.core.config import get_settings
+from app.db.postgres import engine
+from app.models.agent import Agent
 
 
 @dataclass(slots=True)
@@ -106,7 +109,16 @@ async def verify_agent_auth(
                 x_agent_id,
             ]
         )
-        if not _verify_hmac(settings.agent_hmac_secret, canonical_message, x_signature):
+        with Session(engine) as session:
+            agent = session.exec(select(Agent).where(Agent.agent_id == x_agent_id)).first()
+        if not agent:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Unknown agent_id for HMAC authentication",
+            )
+
+        expected_secret = agent.hmac_secret or settings.agent_hmac_secret
+        if not _verify_hmac(expected_secret, canonical_message, x_signature):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid HMAC signature",

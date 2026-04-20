@@ -58,6 +58,7 @@ function buildChecklistRows(payload, prefix) {
 }
 
 const nav = [
+  { key: "integration", label: "Integration", icon: ArrowUpRight },
   { key: "quickstart", label: "Quickstart", icon: Clock3 },
   { key: "overview", label: "Overview", icon: Home },
   { key: "activity", label: "Activity", icon: Activity },
@@ -144,15 +145,6 @@ export default function App() {
     agentName: "",
   });
   const [checklist, setChecklist] = useState(null);
-  const [txForm, setTxForm] = useState({
-    declared_goal: "Book travel to NYC conference",
-    amount_usd: "49",
-    vendor_url_or_name: "Delta Airlines",
-    item_description: "Flight booking for August 1",
-    stablecoin_symbol: "USDC",
-    network: "base",
-    destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
-  });
   const [notes, setNotes] = useState({});
 
   const pendingCount = approvals.length;
@@ -278,7 +270,7 @@ export default function App() {
         if (data.agents.length > 0) {
           const first = data.agents[0].agent_id;
           setActiveAgentId(first);
-          setPage("quickstart");
+          setPage("integration");
           await refresh(first);
           await refreshChecklist(first);
         } else {
@@ -335,6 +327,8 @@ export default function App() {
         setAgents(data.agents);
         setActiveAgentId(res.agent_id);
         await refresh(res.agent_id);
+        await refreshChecklist(res.agent_id);
+        setPage("integration");
       })
       .catch((err) => toast(err.message || "Create agent failed"));
   };
@@ -364,7 +358,7 @@ export default function App() {
         setActiveAgentId(res.agent_id);
         await refresh(res.agent_id);
         await refreshChecklist(res.agent_id);
-        setPage("quickstart");
+        setPage("integration");
         toast("Quickstart bootstrap complete");
       })
       .catch((err) => toast(err.message || "Bootstrap failed"));
@@ -415,36 +409,58 @@ export default function App() {
       .catch((err) => toast(err.message || "Suspicious test failed"));
   };
 
-  const submitLiveSpend = () => {
-    if (!activeAgentId) return;
-    const amountCents = Math.max(1, Math.round(Number(txForm.amount_usd || "0") * 100));
-    submitSpendRequest(activeAgentId, {
-      agent_id: activeAgentId,
-      declared_goal: txForm.declared_goal,
-      amount_cents: amountCents,
-      currency: "USD",
-      vendor_url_or_name: txForm.vendor_url_or_name,
-      item_description: txForm.item_description,
-      asset_type: "STABLECOIN",
-      stablecoin_symbol: txForm.stablecoin_symbol,
-      network: txForm.network,
-      destination_address: txForm.destination_address,
-      idempotency_key: `dash-${Date.now()}`,
-    })
-      .then((res) => {
-        const statusText = res.status || "submitted";
-        toast(`Spend request ${statusText}`);
-      })
-      .then(() => refresh(activeAgentId))
-      .then(() => refreshChecklist(activeAgentId))
-      .catch((err) => toast(err.message || "Spend request failed"));
-  };
-
   const addBlockedVendor = () => {
     const v = form.draftVendor.trim();
     if (!v) return;
     setForm((p) => ({ ...p, blocked: Array.from(new Set([...p.blocked, v])), draftVendor: "" }));
   };
+
+  const effectiveAgentId = activeAgentId || creds.agentId || "agt_your_agent_id";
+  const effectiveSecret = secretReveal ? creds.hmac : "<your-hmac-secret>";
+  const integrationPython = `import hashlib
+import hmac
+import json
+from datetime import datetime, timezone
+
+import requests
+
+API_URL = "http://127.0.0.1:8000/v1/spend-request"
+AGENT_ID = "${effectiveAgentId}"
+AGENT_HMAC_SECRET = "${effectiveSecret}"
+
+body = {
+    "agent_id": AGENT_ID,
+    "declared_goal": "Book flight JFK Aug 1",
+    "amount_cents": 4900,
+    "currency": "USD",
+    "vendor_url_or_name": "delta.com",
+    "item_description": "Flight booking",
+    "asset_type": "STABLECOIN",
+    "stablecoin_symbol": "USDC",
+    "network": "base",
+    "destination_address": "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
+    "idempotency_key": "agent-run-001",
+}
+
+timestamp = datetime.now(timezone.utc).isoformat()
+body_json = json.dumps(body, separators=(",", ":"))
+body_hash = hashlib.sha256(body_json.encode()).hexdigest()
+canonical = "\\n".join(["POST", "/v1/spend-request", timestamp, body_hash, AGENT_ID])
+signature = hmac.new(AGENT_HMAC_SECRET.encode(), canonical.encode(), hashlib.sha256).hexdigest()
+
+response = requests.post(
+    API_URL,
+    headers={
+        "Content-Type": "application/json",
+        "x-agent-id": AGENT_ID,
+        "x-timestamp": timestamp,
+        "x-signature": signature,
+    },
+    data=body_json,
+    timeout=15,
+)
+
+print(response.status_code, response.text)`;
 
   const pageTitle = page.charAt(0).toUpperCase() + page.slice(1);
 
@@ -560,6 +576,50 @@ export default function App() {
         </header>
 
         <section style={{ padding: 24 }}>
+          {page === "integration" ? (
+            <div style={{ maxWidth: 900 }}>
+              <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)", marginBottom: 8 }}>
+                  Agent Integration (Primary)
+                </div>
+                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>
+                  Agents should call `POST /v1/spend-request` directly from their workflow. This is the production path.
+                </div>
+                <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
+                  endpoint: http://127.0.0.1:8000/v1/spend-request
+                </div>
+                <div style={{ marginTop: 6, fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
+                  agent_id: {effectiveAgentId}
+                </div>
+              </div>
+
+              <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
+                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>Signing Rules</div>
+                <div style={{ fontSize: 11, color: "var(--text-1)", fontFamily: "var(--font-mono)", marginBottom: 8 }}>
+                  canonical = METHOD + "\n" + PATH + "\n" + x-timestamp + "\n" + sha256(body) + "\n" + x-agent-id
+                </div>
+                <div style={{ fontSize: 11, color: "var(--text-3)" }}>
+                  Send `x-agent-id`, `x-timestamp`, and `x-signature` (HMAC-SHA256). In local dev, you can still use `x-agent-key: local-dev-key`.
+                </div>
+              </div>
+
+              <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, color: "var(--text-2)" }}>Generated Python Snippet</div>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(integrationPython)}
+                    style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}
+                  >
+                    [copy]
+                  </button>
+                </div>
+                <pre style={{ margin: 0, fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-1)", whiteSpace: "pre-wrap" }}>
+                  {integrationPython}
+                </pre>
+              </div>
+            </div>
+          ) : null}
+
           {page === "quickstart" ? (
             <div style={{ maxWidth: 780 }}>
               <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
@@ -599,19 +659,22 @@ export default function App() {
 
               {activeAgentId ? (
                 <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>Quick Validation</div>
+                  <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 2 }}>Developer Tools</div>
+                  <div style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 10 }}>
+                    These actions simulate external agent calls for onboarding and testing.
+                  </div>
                   <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
                     <button
                       onClick={runSafeTest}
                       style={{ height: 30, border: "1px solid var(--green)", background: "rgba(0,200,83,0.12)", color: "var(--green)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
                     >
-                      Run SAFE Test
+                      Run SAFE Test (simulates external agent call)
                     </button>
                     <button
                       onClick={runSuspiciousTest}
                       style={{ height: 30, border: "1px solid var(--amber)", background: "rgba(255,149,0,0.12)", color: "var(--amber)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
                     >
-                      Run HITL Test
+                      Run HITL Test (simulates external agent call)
                     </button>
                     <button
                       onClick={() => refreshChecklist(activeAgentId)}
@@ -656,71 +719,6 @@ export default function App() {
 
           {page === "overview" ? (
             <>
-              <div style={{ border: "1px solid var(--border)", padding: 10, marginBottom: 10 }}>
-                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>Submit Live Spend Request</div>
-                <div style={{ display: "grid", gridTemplateColumns: "1.4fr 0.6fr 1fr", gap: 8, marginBottom: 8 }}>
-                  <input
-                    value={txForm.declared_goal}
-                    onChange={(e) => setTxForm((p) => ({ ...p, declared_goal: e.target.value }))}
-                    placeholder="declared goal"
-                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
-                  />
-                  <input
-                    value={txForm.amount_usd}
-                    onChange={(e) => setTxForm((p) => ({ ...p, amount_usd: e.target.value }))}
-                    placeholder="amount USD"
-                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
-                  />
-                  <input
-                    value={txForm.vendor_url_or_name}
-                    onChange={(e) => setTxForm((p) => ({ ...p, vendor_url_or_name: e.target.value }))}
-                    placeholder="vendor"
-                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
-                  />
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 130px 130px", gap: 8, marginBottom: 8 }}>
-                  <input
-                    value={txForm.item_description}
-                    onChange={(e) => setTxForm((p) => ({ ...p, item_description: e.target.value }))}
-                    placeholder="item description"
-                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
-                  />
-                  <select
-                    value={txForm.stablecoin_symbol}
-                    onChange={(e) => setTxForm((p) => ({ ...p, stablecoin_symbol: e.target.value }))}
-                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-2)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
-                  >
-                    <option value="USDC">USDC</option>
-                    <option value="USDT">USDT</option>
-                  </select>
-                  <select
-                    value={txForm.network}
-                    onChange={(e) => setTxForm((p) => ({ ...p, network: e.target.value }))}
-                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-2)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
-                  >
-                    <option value="base">base</option>
-                    <option value="ethereum">ethereum</option>
-                    <option value="polygon">polygon</option>
-                    <option value="arbitrum">arbitrum</option>
-                    <option value="solana">solana</option>
-                  </select>
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8 }}>
-                  <input
-                    value={txForm.destination_address}
-                    onChange={(e) => setTxForm((p) => ({ ...p, destination_address: e.target.value }))}
-                    placeholder="destination address"
-                    style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
-                  />
-                  <button
-                    onClick={submitLiveSpend}
-                    style={{ height: 30, border: "1px solid var(--text-1)", background: "var(--text-1)", color: "var(--bg)", fontFamily: "var(--font-mono)", fontSize: 12, padding: "0 10px", cursor: "pointer" }}
-                  >
-                    Submit Request
-                  </button>
-                </div>
-              </div>
-
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
                 {[
                   ["transactions", stats.total, "today", "var(--text-1)"],

@@ -24,6 +24,12 @@ class AgentCreateResponse(BaseModel):
     created_at: datetime
 
 
+class AgentRotateHmacResponse(BaseModel):
+    agent_id: str
+    hmac_secret: str
+    rotated_at: datetime
+
+
 class AgentSummary(BaseModel):
     agent_id: str
     display_name: str

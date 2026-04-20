@@ -22,6 +22,8 @@ class Agent(SQLModel, table=True):
     blocked_destination_addresses: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     hitl_phone_number: str | None = Field(default=None, max_length=64)
     hitl_phone_verified_at: datetime | None = Field(default=None)
+    hmac_secret: str | None = Field(default=None, max_length=256)
+    hmac_secret_rotated_at: datetime | None = Field(default=None)
     hitl_primary_channel: str = Field(default="dashboard", max_length=16)
     hitl_sms_fallback_high_risk: bool = Field(default=True)
     hitl_required_over_cents: int | None = Field(default=None)

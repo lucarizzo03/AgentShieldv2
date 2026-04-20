@@ -30,6 +30,7 @@ async def bootstrap_onboarding(payload: OnboardingBootstrapRequest, session: Ses
 
     now = datetime.now(timezone.utc)
     agent_id = f"agt_{uuid4().hex[:18]}"
+    hmac_secret = f"sk_live_{token_urlsafe(18)}"
     agent = Agent(
         agent_id=agent_id,
         display_name=payload.agent_name,
@@ -40,6 +41,8 @@ async def bootstrap_onboarding(payload: OnboardingBootstrapRequest, session: Ses
         allowed_networks=payload.allowed_networks or ["base"],
         allowed_stablecoins=payload.allowed_tokens or ["USDC"],
         currency="USD",
+        hmac_secret=hmac_secret,
+        hmac_secret_rotated_at=now,
         created_at=now,
         updated_at=now,
     )
@@ -62,7 +65,7 @@ async def bootstrap_onboarding(payload: OnboardingBootstrapRequest, session: Ses
         "email": payload.email,
         "agent_id": agent_id,
         "display_name": payload.agent_name,
-        "hmac_secret": f"sk_live_{token_urlsafe(18)}",
+        "hmac_secret": hmac_secret,
         "next_steps": [
             "Send one SAFE test request",
             "Send one SUSPICIOUS test request",
