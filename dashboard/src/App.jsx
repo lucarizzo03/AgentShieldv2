@@ -417,6 +417,7 @@ export default function App() {
 
   const effectiveAgentId = activeAgentId || creds.agentId || "agt_your_agent_id";
   const effectiveSecret = secretReveal ? creds.hmac : "<your-hmac-secret>";
+  const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/v1";
   const integrationPython = `import hashlib
 import hmac
 import json
@@ -424,7 +425,7 @@ from datetime import datetime, timezone
 
 import requests
 
-API_URL = "http://127.0.0.1:8000/v1/spend-request"
+API_URL = "${apiBase}/spend-request"
 AGENT_ID = "${effectiveAgentId}"
 AGENT_HMAC_SECRET = "${effectiveSecret}"
 
@@ -586,7 +587,7 @@ print(response.status_code, response.text)`;
                   Agents should call `POST /v1/spend-request` directly from their workflow. This is the production path.
                 </div>
                 <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
-                  endpoint: http://127.0.0.1:8000/v1/spend-request
+                  endpoint: {apiBase}/spend-request
                 </div>
                 <div style={{ marginTop: 6, fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
                   agent_id: {effectiveAgentId}
@@ -608,9 +609,11 @@ print(response.status_code, response.text)`;
                   <div style={{ fontSize: 12, color: "var(--text-2)" }}>Generated Python Snippet</div>
                   <button
                     onClick={() => navigator.clipboard.writeText(integrationPython)}
-                    style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}
+                    disabled={!secretReveal}
+                    title={!secretReveal ? "Reveal your HMAC secret first" : "Copy snippet"}
+                    style={{ border: "none", background: "transparent", color: secretReveal ? "var(--text-2)" : "var(--text-3)", fontSize: 11, cursor: secretReveal ? "pointer" : "not-allowed" }}
                   >
-                    [copy]
+                    {secretReveal ? "[copy]" : "[reveal secret to copy]"}
                   </button>
                 </div>
                 <pre style={{ margin: 0, fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-1)", whiteSpace: "pre-wrap" }}>
