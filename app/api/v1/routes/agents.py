@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from secrets import token_urlsafe
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 
 from app.api.v1.schemas.agent import (
@@ -11,6 +11,7 @@ from app.api.v1.schemas.agent import (
     AgentListResponse,
     AgentRotateHmacResponse,
 )
+from app.core.security import AuthContext, verify_agent_auth
 from app.db.postgres import engine
 from app.models.agent import Agent
 
@@ -71,7 +72,7 @@ async def list_agents():
 
 
 @router.post("/agents/{agent_id}/credentials/hmac/rotate", response_model=AgentRotateHmacResponse)
-async def rotate_agent_hmac(agent_id: str):
+async def rotate_agent_hmac(agent_id: str, auth: AuthContext = Depends(verify_agent_auth)):
     with Session(engine) as session:
         agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
         if not agent:

@@ -111,13 +111,18 @@ async def verify_agent_auth(
         )
         with Session(engine) as session:
             agent = session.exec(select(Agent).where(Agent.agent_id == x_agent_id)).first()
-        if not agent:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unknown agent_id for HMAC authentication",
-            )
+            if not agent:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Unknown agent_id for HMAC authentication",
+                )
+            if not agent.hmac_secret:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Agent has no HMAC secret — rotate credentials first",
+                )
+            expected_secret = agent.hmac_secret
 
-        expected_secret = agent.hmac_secret or settings.agent_hmac_secret
         if not _verify_hmac(expected_secret, canonical_message, x_signature):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
