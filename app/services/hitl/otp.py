@@ -30,7 +30,7 @@ async def send_otp(redis: Redis, agent_id: str, phone_number: str) -> dict:
     await redis.delete(_attempt_key(agent_id))
     logger.info(
         "OTP generated for phone verification",
-        extra={"agent_id": agent_id, "phone_number": phone_number, "otp_code": code},
+        extra={"agent_id": agent_id, "phone_number": phone_number},
     )
     return {"expires_in_seconds": OTP_TTL_SECONDS}
 

@@ -34,10 +34,15 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
 
 - **FastAPI API Layer**
   - `app/main.py`
+  - `app/api/v1/routes/agents.py`
+  - `app/api/v1/routes/contact.py`
   - `app/api/v1/routes/spend.py`
   - `app/api/v1/routes/hitl.py`
+  - `app/api/v1/routes/dashboard.py`
+  - `app/api/v1/routes/onboarding.py`
 - **Policy Engine**
   - `app/policy/engine.py`
+  - `app/policy/verdicts.py`
   - `app/policy/checks/quantitative.py`
   - `app/policy/checks/policy_db.py`
   - `app/policy/checks/semantic.py`
@@ -48,6 +53,7 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
   - Base interface: `app/services/payment/adapter_base.py`
   - Stablecoin execution: `app/services/payment/tempo_adapter.py`
   - Optional fiat execution: `app/services/payment/stripe_adapter.py`
+  - Stablecoin policy validation: `app/services/payment/stablecoin_policy.py`
 - **HITL Services**
   - Provider-agnostic stub notification service: `app/services/hitl/notifier.py`
   - Inbound text parser: `app/services/hitl/sms_parser.py`
@@ -152,14 +158,21 @@ To support UI-driven phone onboarding:
 
 ### Endpoint Index
 
-- `POST /v1/spend-request`
-- `POST /v1/hitl/resolve/{request_id}`
-- `POST /v1/hitl/sms/inbound`
-- `POST /v1/agents/{agent_id}/contact/phone/start`
-- `POST /v1/agents/{agent_id}/contact/phone/verify`
-- `PATCH /v1/agents/{agent_id}/preferences/hitl`
-- `GET /v1/dashboard/agents/{agent_id}/notifications?status=OPEN`
-- `PATCH /v1/dashboard/agents/{agent_id}/notifications/{notification_id}`
+- `POST /v1/agents` — register a new agent
+- `GET /v1/agents` — list all agents
+- `POST /v1/agents/{agent_id}/credentials/hmac/rotate` — rotate HMAC secret
+- `POST /v1/agents/{agent_id}/contact/phone/start` — start OTP phone verification
+- `POST /v1/agents/{agent_id}/contact/phone/verify` — confirm OTP
+- `PATCH /v1/agents/{agent_id}/preferences/hitl` — update HITL channel preferences
+- `POST /v1/spend-request` — submit a spend intent for evaluation
+- `POST /v1/hitl/resolve/{request_id}` — approve or deny a pending spend (dashboard/webhook)
+- `POST /v1/hitl/sms/inbound` — inbound SMS webhook (Twilio)
+- `GET /v1/dashboard/agents/{agent_id}/notifications?status=OPEN` — HITL queue
+- `PATCH /v1/dashboard/agents/{agent_id}/notifications/{notification_id}` — ACK or DISMISS
+- `GET /v1/dashboard/agents/{agent_id}/activity` — full audit log with check results
+- `GET /v1/dashboard/agents/{agent_id}/stats` — daily transaction counts by outcome
+- `POST /v1/onboarding/bootstrap` — one-shot agent setup with quickstart curl
+- `GET /v1/onboarding/agents/{agent_id}/checklist` — onboarding progress tracker
 
 ### 1) `POST /v1/spend-request`
 
@@ -241,11 +254,13 @@ Inbound webhook for SMS providers (provider-agnostic parser endpoint).
   - Append-only ledger of checks/verdicts/execution metadata
 - `PendingSpend` (`app/models/pending_spend.py`)
   - Paused requests awaiting human decision
+- `DashboardNotification` (`app/models/dashboard_notification.py`)
+  - HITL queue visible to ops dashboard; tracks OPEN/ACKED/RESOLVED/DISMISSED state
 
-Migration artifact:
+Migration artifacts:
 
-- Alembic initial revision: `app/migrations/versions/20260418_0001_initial_schema.py`
-- Legacy SQL snapshot: `app/migrations/versions/0001_initial_schema.sql`
+- `app/migrations/versions/20260418_0001_initial_schema.py` — initial schema
+- `app/migrations/versions/20260420_0002_agent_hmac_secret.py` — adds HMAC secret fields to Agent
 
 ### Redis Keys
 
