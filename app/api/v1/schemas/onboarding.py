@@ -28,8 +28,6 @@ class OnboardingBootstrapResponse(BaseModel):
 class OnboardingChecklistResponse(BaseModel):
     agent_id: str
     agent_created: bool
-    first_safe_executed: bool
-    pending_hitl_created: bool
-    human_resolution_done: bool
-    pending_open_count: int
+    first_transaction_submitted: bool
+    human_decision_made: bool
     ready_for_live: bool

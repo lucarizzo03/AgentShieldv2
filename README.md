@@ -172,7 +172,7 @@ To support UI-driven phone onboarding:
 - `GET /v1/dashboard/agents/{agent_id}/activity` — full audit log with check results
 - `GET /v1/dashboard/agents/{agent_id}/stats` — daily transaction counts by outcome
 - `POST /v1/onboarding/bootstrap` — one-shot agent setup with quickstart curl
-- `GET /v1/onboarding/agents/{agent_id}/checklist` — onboarding progress tracker
+- `GET /v1/onboarding/agents/{agent_id}/checklist` — onboarding progress tracker (fields: `agent_created`, `first_transaction_submitted`, `human_decision_made`, `ready_for_live`)
 
 ### 1) `POST /v1/spend-request`
 

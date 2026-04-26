@@ -10,10 +10,8 @@ from app.api.v1.schemas.onboarding import (
     OnboardingBootstrapResponse,
     OnboardingChecklistResponse,
 )
-from app.core.security import AuthContext, verify_agent_auth
 from app.db.postgres import get_session
 from app.models.agent import Agent
-from app.models.dashboard_notification import DashboardNotification
 from app.models.spend_audit_log import SpendAuditLog
 
 router = APIRouter(tags=["onboarding"])
@@ -78,39 +76,22 @@ async def bootstrap_onboarding(payload: OnboardingBootstrapRequest, session: Ses
 @router.get("/onboarding/agents/{agent_id}/checklist", response_model=OnboardingChecklistResponse)
 async def get_onboarding_checklist(
     agent_id: str,
-    auth_context: AuthContext = Depends(verify_agent_auth),
     session: Session = Depends(get_session),
 ):
-    if auth_context.agent_id and auth_context.agent_id != agent_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Authenticated agent_id does not match requested agent_id",
-        )
-
     agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
     logs = session.exec(select(SpendAuditLog).where(SpendAuditLog.agent_id == agent_id)).all()
-    pending_open_count = len(
-        session.exec(
-            select(DashboardNotification)
-            .where(DashboardNotification.agent_id == agent_id)
-            .where(DashboardNotification.status == "OPEN")
-        ).all()
-    )
 
-    first_safe_executed = any(row.status == "APPROVED_EXECUTED" for row in logs)
-    pending_hitl_created = any(row.status == "PENDING_HITL" for row in logs) or pending_open_count > 0
-    human_resolution_done = any(
+    first_transaction_submitted = len(logs) > 0
+    human_decision_made = any(
         row.status in {"APPROVED_BY_HUMAN_EXECUTED", "DENIED_BY_HUMAN"} for row in logs
     )
     return {
         "agent_id": agent_id,
         "agent_created": True,
-        "first_safe_executed": first_safe_executed,
-        "pending_hitl_created": pending_hitl_created,
-        "human_resolution_done": human_resolution_done,
-        "pending_open_count": pending_open_count,
-        "ready_for_live": first_safe_executed and human_resolution_done,
+        "first_transaction_submitted": first_transaction_submitted,
+        "human_decision_made": human_decision_made,
+        "ready_for_live": first_transaction_submitted and human_decision_made,
     }

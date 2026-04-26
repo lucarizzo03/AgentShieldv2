@@ -61,49 +61,66 @@ async def _resolve_pending(
             "provider_txn_id": payment["provider_txn_id"],
         }
 
-        audit = SpendAuditLog(
-            request_id=request_id,
-            agent_id=original.agent_id,
-            declared_goal=original.declared_goal,
-            amount_cents=original.amount_cents,
-            currency=original.currency,
-            asset_type=original.asset_type,
-            stablecoin_symbol=original.stablecoin_symbol,
-            network=original.network,
-            destination_address=original.destination_address,
-            vendor_url_or_name=original.vendor_url_or_name,
-            item_description=original.item_description,
-            quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
-            policy_result=pending.verdict_snapshot.get("policy_result", {}),
-            semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
-            verdict="SAFE",
-            status="APPROVED_BY_HUMAN_EXECUTED",
-            payment_provider=payment["provider"],
-            payment_txn_id=payment["provider_txn_id"],
-            onchain_tx_hash=payment.get("onchain_tx_hash"),
-        )
+        audit = session.exec(
+            select(SpendAuditLog).where(SpendAuditLog.request_id == request_id)
+        ).first()
+        if audit:
+            audit.status = "APPROVED_BY_HUMAN_EXECUTED"
+            audit.verdict = "SAFE"
+            audit.payment_provider = payment["provider"]
+            audit.payment_txn_id = payment["provider_txn_id"]
+            audit.onchain_tx_hash = payment.get("onchain_tx_hash")
+        else:
+            audit = SpendAuditLog(
+                request_id=request_id,
+                agent_id=original.agent_id,
+                declared_goal=original.declared_goal,
+                amount_cents=original.amount_cents,
+                currency=original.currency,
+                asset_type=original.asset_type,
+                stablecoin_symbol=original.stablecoin_symbol,
+                network=original.network,
+                destination_address=original.destination_address,
+                vendor_url_or_name=original.vendor_url_or_name,
+                item_description=original.item_description,
+                quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
+                policy_result=pending.verdict_snapshot.get("policy_result", {}),
+                semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
+                verdict="SAFE",
+                status="APPROVED_BY_HUMAN_EXECUTED",
+                payment_provider=payment["provider"],
+                payment_txn_id=payment["provider_txn_id"],
+                onchain_tx_hash=payment.get("onchain_tx_hash"),
+            )
         session.add(audit)
     else:
         increment("hitl.decision.deny")
         original = pending.payload_json
-        audit = SpendAuditLog(
-            request_id=f"{request_id}_deny_{int(datetime.now(timezone.utc).timestamp())}",
-            agent_id=original["agent_id"],
-            declared_goal=original["declared_goal"],
-            amount_cents=original["amount_cents"],
-            currency=original["currency"],
-            asset_type=original["asset_type"],
-            stablecoin_symbol=original.get("stablecoin_symbol"),
-            network=original.get("network"),
-            destination_address=original.get("destination_address"),
-            vendor_url_or_name=original["vendor_url_or_name"],
-            item_description=original["item_description"],
-            quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
-            policy_result=pending.verdict_snapshot.get("policy_result", {}),
-            semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
-            verdict="MALICIOUS",
-            status="DENIED_BY_HUMAN",
-        )
+        audit = session.exec(
+            select(SpendAuditLog).where(SpendAuditLog.request_id == request_id)
+        ).first()
+        if audit:
+            audit.status = "DENIED_BY_HUMAN"
+            audit.verdict = "MALICIOUS"
+        else:
+            audit = SpendAuditLog(
+                request_id=request_id,
+                agent_id=original["agent_id"],
+                declared_goal=original["declared_goal"],
+                amount_cents=original["amount_cents"],
+                currency=original["currency"],
+                asset_type=original["asset_type"],
+                stablecoin_symbol=original.get("stablecoin_symbol"),
+                network=original.get("network"),
+                destination_address=original.get("destination_address"),
+                vendor_url_or_name=original["vendor_url_or_name"],
+                item_description=original["item_description"],
+                quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
+                policy_result=pending.verdict_snapshot.get("policy_result", {}),
+                semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
+                verdict="MALICIOUS",
+                status="DENIED_BY_HUMAN",
+            )
         session.add(audit)
 
     notification = session.exec(
