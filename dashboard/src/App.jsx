@@ -33,13 +33,13 @@ import {
 } from "./lib/api";
 
 const emptyChart = [
-  { t: "00:00", v: 0 },
-  { t: "04:00", v: 0 },
-  { t: "08:00", v: 0 },
-  { t: "12:00", v: 0 },
-  { t: "16:00", v: 0 },
-  { t: "20:00", v: 0 },
-  { t: "24:00", v: 0 },
+  { t: "00:00", safe: 0, blocked: 0, pending: 0 },
+  { t: "04:00", safe: 0, blocked: 0, pending: 0 },
+  { t: "08:00", safe: 0, blocked: 0, pending: 0 },
+  { t: "12:00", safe: 0, blocked: 0, pending: 0 },
+  { t: "16:00", safe: 0, blocked: 0, pending: 0 },
+  { t: "20:00", safe: 0, blocked: 0, pending: 0 },
+  { t: "24:00", safe: 0, blocked: 0, pending: 0 },
 ];
 
 function normalizeStatus(status) {
@@ -117,6 +117,7 @@ export default function App() {
   const [rows, setRows] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [testRunning, setTestRunning] = useState(false);
   const [page, setPage] = useState("agents");
   const [filter, setFilter] = useState("All");
   const [expanded, setExpanded] = useState(null);
@@ -163,18 +164,23 @@ export default function App() {
   }, []);
 
   const chartData = useMemo(() => {
-    if (rows.length === 0) return emptyChart;
-    const buckets = [0, 4, 8, 12, 16, 20, 24].map((hour) => ({
+    const hours = [0, 4, 8, 12, 16, 20, 24];
+    const buckets = hours.map((hour) => ({
       t: `${String(hour).padStart(2, "0")}:00`,
-      v: 0,
+      safe: 0,
+      blocked: 0,
+      pending: 0,
     }));
     rows.forEach((row) => {
       const [h] = (row.time || "00:00:00").split(":");
-      const hour = Number(h);
-      const idx = Math.min(6, Math.floor(hour / 4));
-      buckets[idx].v += row.amount;
+      const idx = Math.min(6, Math.floor(Number(h) / 4));
+      if (row.status === "SAFE" || row.status === "APPROVED") buckets[idx].safe += 1;
+      else if (row.status === "BLOCKED" || row.status === "DENIED") buckets[idx].blocked += 1;
+      else if (row.status === "PENDING") buckets[idx].pending += 1;
     });
-    return buckets;
+    // Trim future empty buckets so the lines don't drop to zero at the end
+    const currentIdx = Math.min(6, Math.floor(new Date().getHours() / 4) + 1);
+    return buckets.slice(0, currentIdx);
   }, [rows]);
 
   const refresh = useCallback(
@@ -289,7 +295,6 @@ export default function App() {
     if (!activeAgentId) return;
     const timer = setInterval(() => {
       refresh(activeAgentId).catch(() => {});
-      refreshChecklist(activeAgentId).catch(() => {});
     }, 5000);
     return () => clearInterval(timer);
   }, [activeAgentId, refresh, refreshChecklist]);
@@ -307,8 +312,8 @@ export default function App() {
   };
 
   const handleCreateAgent = (e) => {
-    if (loading) return;
     e.preventDefault();
+    if (loading) return;
     if (!form.name || !form.daily || !form.perTx || !form.auto) return;
     createAgentRequest({
       agent_name: form.name,
@@ -365,7 +370,9 @@ export default function App() {
   };
 
   const runSafeTest = () => {
-    if (!activeAgentId) return;
+    if (!activeAgentId || testRunning) return;
+    setTestRunning(true);
+    toast("Running SAFE test…");
     submitSpendRequest(activeAgentId, {
       agent_id: activeAgentId,
       declared_goal: "Book flight to NYC conference",
@@ -379,14 +386,16 @@ export default function App() {
       destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
       idempotency_key: `quick-safe-${Date.now()}`,
     })
-      .then(() => refresh(activeAgentId))
-      .then(() => refreshChecklist(activeAgentId))
-      .then(() => toast("SAFE test submitted"))
-      .catch((err) => toast(err.message || "SAFE test failed"));
+      .then(() => Promise.all([refresh(activeAgentId), refreshChecklist(activeAgentId)]))
+      .then(() => toast("✓ SAFE test complete"))
+      .catch((err) => toast(err.message || "SAFE test failed"))
+      .finally(() => setTestRunning(false));
   };
 
   const runSuspiciousTest = () => {
-    if (!activeAgentId) return;
+    if (!activeAgentId || testRunning) return;
+    setTestRunning(true);
+    toast("Running HITL test…");
     submitSpendRequest(activeAgentId, {
       agent_id: activeAgentId,
       declared_goal: "Book flight to NYC conference",
@@ -400,13 +409,13 @@ export default function App() {
       destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
       idempotency_key: `quick-suspicious-${Date.now()}`,
     })
-      .then(() => refresh(activeAgentId))
-      .then(() => refreshChecklist(activeAgentId))
+      .then(() => Promise.all([refresh(activeAgentId), refreshChecklist(activeAgentId)]))
       .then(() => {
         setPage("approvals");
-        toast("Suspicious HITL test submitted");
+        toast("✓ HITL test submitted — approve in Approvals");
       })
-      .catch((err) => toast(err.message || "Suspicious test failed"));
+      .catch((err) => toast(err.message || "Suspicious test failed"))
+      .finally(() => setTestRunning(false));
   };
 
   const addBlockedVendor = () => {
@@ -669,19 +678,22 @@ print(response.status_code, response.text)`;
                   <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
                     <button
                       onClick={runSafeTest}
-                      style={{ height: 30, border: "1px solid var(--green)", background: "rgba(0,200,83,0.12)", color: "var(--green)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
+                      disabled={testRunning}
+                      style={{ height: 30, border: `1px solid ${testRunning ? "var(--border)" : "var(--green)"}`, background: testRunning ? "transparent" : "rgba(0,200,83,0.12)", color: testRunning ? "var(--text-3)" : "var(--green)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: testRunning ? "not-allowed" : "pointer" }}
                     >
-                      Run SAFE Test (simulates external agent call)
+                      {testRunning ? "running…" : "Run SAFE Test"}
                     </button>
                     <button
                       onClick={runSuspiciousTest}
-                      style={{ height: 30, border: "1px solid var(--amber)", background: "rgba(255,149,0,0.12)", color: "var(--amber)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
+                      disabled={testRunning}
+                      style={{ height: 30, border: `1px solid ${testRunning ? "var(--border)" : "var(--amber)"}`, background: testRunning ? "transparent" : "rgba(255,149,0,0.12)", color: testRunning ? "var(--text-3)" : "var(--amber)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: testRunning ? "not-allowed" : "pointer" }}
                     >
-                      Run HITL Test (simulates external agent call)
+                      {testRunning ? "running…" : "Run HITL Test"}
                     </button>
                     <button
                       onClick={() => refreshChecklist(activeAgentId)}
-                      style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-2)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}
+                      disabled={testRunning}
+                      style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: testRunning ? "var(--text-3)" : "var(--text-2)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: testRunning ? "not-allowed" : "pointer" }}
                     >
                       Refresh Checklist
                     </button>
@@ -698,9 +710,8 @@ print(response.status_code, response.text)`;
                   <>
                     {[
                       ["Agent created", checklist.agent_created],
-                      ["First SAFE transaction executed", checklist.first_safe_executed],
-                      ["One HITL pending request created", checklist.pending_hitl_created],
-                      ["One HITL request resolved", checklist.human_resolution_done],
+                      ["First transaction submitted", checklist.first_transaction_submitted],
+                      ["First human decision made", checklist.human_decision_made],
                     ].map(([label, ok]) => (
                       <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
                         <span style={{ fontSize: 12, color: "var(--text-1)" }}>{label}</span>
@@ -738,15 +749,24 @@ print(response.status_code, response.text)`;
               </div>
 
               <div style={{ marginTop: 16, border: "1px solid var(--border)", padding: 12 }}>
-                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>Spend Activity</div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <div style={{ fontSize: 12, color: "var(--text-2)" }}>Request Activity</div>
+                  <div style={{ display: "flex", gap: 12, fontSize: 11, color: "var(--text-3)" }}>
+                    <span style={{ color: "var(--green)" }}>— safe</span>
+                    <span style={{ color: "var(--red)" }}>— blocked</span>
+                    <span style={{ color: "var(--amber)" }}>— pending</span>
+                  </div>
+                </div>
                 <div style={{ height: 220 }}>
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={chartData}>
                       <XAxis dataKey="t" tick={{ fill: "var(--text-3)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fill: "var(--text-3)", fontSize: 11 }} axisLine={false} tickLine={false} />
+                      <YAxis allowDecimals={false} tick={{ fill: "var(--text-3)", fontSize: 11 }} axisLine={false} tickLine={false} />
                       <Tooltip contentStyle={{ background: "var(--bg-overlay)", border: "1px solid var(--border)" }} />
                       <ReferenceLine y={0} stroke="var(--border)" strokeWidth={1} />
-                      <Line dataKey="v" stroke="var(--text-1)" strokeWidth={1.5} dot={false} />
+                      <Line dataKey="safe" stroke="var(--green)" strokeWidth={1.5} dot={false} />
+                      <Line dataKey="blocked" stroke="var(--red)" strokeWidth={1.5} dot={false} />
+                      <Line dataKey="pending" stroke="var(--amber)" strokeWidth={1.5} dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -957,20 +977,29 @@ print(response.status_code, response.text)`;
               {!showSuccess ? (
                 <form onSubmit={handleCreateAgent}>
                   {[
-                    ["Agent Name", "name", "my-booking-agent"],
-                    ["Daily Spend Limit", "daily", ""],
-                    ["Per-Transaction Limit", "perTx", ""],
-                    ["Auto-Approve Under", "auto", ""],
-                  ].map(([label, key, ph]) => (
+                    ["Agent Name", "name", "my-booking-agent", false, null],
+                    ["Daily Spend Limit", "daily", "500", true, "Max total USD the agent can spend per day"],
+                    ["Per-Transaction Limit", "perTx", "200", true, "Max USD allowed per single transaction"],
+                    ["Auto-Approve Under", "auto", "25", true, "Transactions below this USD amount skip HITL review"],
+                  ].map(([label, key, ph, numeric, hint]) => (
                     <div key={key} style={{ marginBottom: 12 }}>
-                      <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>{label}</label>
-                      <input
-                        value={form[key]}
-                        placeholder={ph}
-                        onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
-                        style={{ width: "100%", height: 36, background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-1)", borderRadius: 4, padding: "0 12px", fontSize: 13, fontFamily: "var(--font-mono)" }}
-                        className="fast"
-                      />
+                      <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                        {label}{numeric ? <span style={{ color: "var(--text-3)", textTransform: "none", marginLeft: 6 }}>USD</span> : null}
+                      </label>
+                      {hint ? <div style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 4 }}>{hint}</div> : null}
+                      <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+                        {numeric ? <span style={{ position: "absolute", left: 10, fontSize: 13, color: "var(--text-2)", fontFamily: "var(--font-mono)", pointerEvents: "none" }}>$</span> : null}
+                        <input
+                          type={numeric ? "number" : "text"}
+                          min={numeric ? 1 : undefined}
+                          step={numeric ? 1 : undefined}
+                          value={form[key]}
+                          placeholder={ph}
+                          onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
+                          style={{ width: "100%", height: 36, background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-1)", borderRadius: 4, paddingLeft: numeric ? 22 : 12, paddingRight: 12, fontSize: 13, fontFamily: "var(--font-mono)" }}
+                          className="fast"
+                        />
+                      </div>
                     </div>
                   ))}
                   <div style={{ marginBottom: 12 }}>

@@ -81,14 +81,11 @@ async def run_quantitative_checks(
             check.reasons.append("DESTINATION_BURST_DETECTED")
 
     check.context = {
-        "budget_key": budget_key,
-        "current_spent_cents": current_spent,
-        "projected_spent_cents": projected,
+        "daily_spent_usd": round(current_spent / 100, 2),
+        "projected_spent_usd": round(projected / 100, 2),
         "budget_exceeded": budget_exceeded,
-        "loop_key": loop_key,
         "loop_count": int(loop_count),
         "destination_burst_count": int(destination_burst),
-        "budget_key_ttl_seconds": seconds_until_next_utc_midnight(),
     }
     return check
 

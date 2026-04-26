@@ -119,7 +119,7 @@ async def list_agent_activity(
                 "network": row.network,
                 "declared_goal": row.declared_goal,
                 "reason": (
-                    (row.semantic_result or {}).get("reason_codes", [None])[0]
+                    ((row.semantic_result or {}).get("reason_codes") or [None])[0]
                     if isinstance(row.semantic_result, dict)
                     else None
                 ),
@@ -151,19 +151,13 @@ async def get_dashboard_stats(
     ).all()
 
     blocked = len([r for r in today_rows if r.status in {"BLOCKED", "DENIED_BY_HUMAN"}])
-    auto_approved = len([r for r in today_rows if r.status == "APPROVED_EXECUTED"])
-    pending_approval = len(
-        session.exec(
-            select(DashboardNotification)
-            .where(DashboardNotification.agent_id == agent_id)
-            .where(DashboardNotification.status == "OPEN")
-        ).all()
-    )
+    approved = len([r for r in today_rows if r.status in {"APPROVED_EXECUTED", "APPROVED_BY_HUMAN_EXECUTED"}])
+    pending_approval = len([r for r in today_rows if r.status == "PENDING_HITL"])
     return {
         "agent_id": agent_id,
         "total_transactions_today": len(today_rows),
         "blocked": blocked,
         "pending_approval": pending_approval,
-        "auto_approved": auto_approved,
+        "auto_approved": approved,
     }
 
