@@ -165,11 +165,13 @@ export default function App() {
 
   const chartData = useMemo(() => {
     const hours = [0, 4, 8, 12, 16, 20, 24];
-    const buckets = hours.map((hour) => ({
+    const currentBucketIdx = Math.min(6, Math.floor(new Date().getHours() / 4));
+    // Past/current buckets default to 0; future buckets are null so lines stop cleanly
+    const buckets = hours.map((hour, idx) => ({
       t: `${String(hour).padStart(2, "0")}:00`,
-      safe: 0,
-      blocked: 0,
-      pending: 0,
+      safe: idx <= currentBucketIdx ? 0 : null,
+      blocked: idx <= currentBucketIdx ? 0 : null,
+      pending: idx <= currentBucketIdx ? 0 : null,
     }));
     rows.forEach((row) => {
       const [h] = (row.time || "00:00:00").split(":");
@@ -178,9 +180,7 @@ export default function App() {
       else if (row.status === "BLOCKED" || row.status === "DENIED") buckets[idx].blocked += 1;
       else if (row.status === "PENDING") buckets[idx].pending += 1;
     });
-    // Trim future empty buckets so the lines don't drop to zero at the end
-    const currentIdx = Math.min(6, Math.floor(new Date().getHours() / 4) + 1);
-    return buckets.slice(0, currentIdx);
+    return buckets;
   }, [rows]);
 
   const refresh = useCallback(
@@ -215,7 +215,7 @@ export default function App() {
               redis: buildChecklistRows(item.quantitative_result, ""),
               policy: buildChecklistRows(item.policy_result, ""),
               slm: {
-                score: Number(slm.risk_score ?? 50) / 100,
+                score: +(1 - Number(slm.risk_score ?? 50) / 100).toFixed(2),
                 verdict: slm.alignment_label || item.verdict,
                 reason: (slm.reason_codes || []).join(", ") || "No reason supplied",
               },
@@ -235,7 +235,7 @@ export default function App() {
         notificationResp.notifications.map((n) => {
           const payload = n.payload_json || {};
           const sem = payload.semantic_result || {};
-          const score = Number(sem.risk_score ?? 50) / 100;
+          const score = +(1 - Number(sem.risk_score ?? 50) / 100).toFixed(2);
           return {
             id: n.id,
             requestId: n.request_id,
@@ -775,12 +775,12 @@ print(response.status_code, response.text)`;
               <div style={{ marginTop: 16, border: "1px solid var(--border)" }}>
                 <div style={{ padding: "10px 12px", borderBottom: "1px solid var(--border)", fontSize: 12, color: "var(--text-2)" }}>Recent Activity</div>
                 {rows.slice(0, 5).map((r) => (
-                  <div key={r.id} className="cell" style={{ display: "grid", gridTemplateColumns: "100px 120px 1fr 120px 100px", alignItems: "center", height: 36, padding: "0 12px", fontSize: 12 }}>
+                  <div key={r.id} className="cell" style={{ display: "grid", gridTemplateColumns: "100px 160px 1fr 100px 80px", alignItems: "center", height: 36, padding: "0 12px", fontSize: 12, minWidth: 0 }}>
                     <div style={{ fontFamily: "var(--font-mono)", color: "var(--text-2)" }}>{r.time}</div>
-                    <div>{r.vendor}</div>
-                    <div className="ellipsis" style={{ color: "var(--text-2)", fontStyle: "italic" }}>{r.goal}</div>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.vendor}</div>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-2)", fontStyle: "italic" }}>{r.goal}</div>
                     <div style={{ fontFamily: "var(--font-mono)", textAlign: "right" }}>${r.amount.toFixed(2)}</div>
-                    <div style={{ color: "var(--text-3)", textAlign: "right" }}>{r.network}</div>
+                    <div style={{ color: "var(--text-3)", textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.network}</div>
                   </div>
                 ))}
               </div>

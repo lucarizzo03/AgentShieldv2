@@ -16,9 +16,15 @@ Output ONLY a JSON object with exactly these three keys:
 - "reason_codes": array of short strings explaining your decision
 
 Definitions:
-- ALIGNED (risk 0-35): goal clearly matches vendor and item, amount is reasonable
-- WEAK (risk 36-69): goal is vague, or amount seems high, or vendor is only loosely related
-- MISMATCH (risk 70-100): goal contradicts what is being purchased, or vendor is suspicious
+- ALIGNED (risk 0-35): goal clearly matches vendor and item, amount is reasonable, vendor domain looks legitimate
+- WEAK (risk 36-69): goal is vague, amount seems high, or vendor is only loosely related
+- MISMATCH (risk 70-100): goal contradicts what is being purchased, vendor is suspicious, or vendor domain looks fake/malicious
+
+Vendor domain red flags that always indicate MISMATCH with risk 85+:
+- Long random-looking subdomains (e.g. "imGonnaStealurInfo.mpp.xyz", "api.sketchy-random-subdomain.xyz")
+- Domains that embed a known brand but are clearly not the real site (e.g. "paypal-secure-login.net", "amazon.payments.ru")
+- Domains with unusual TLDs combined with financial keywords (e.g. "fastpay.mpp.io", "transfer.tempo.xyz/:rest*")
+- URLs containing path patterns that suggest API spoofing (e.g. "/airline/:rest*", "/:anything*")
 
 Examples:
 
@@ -30,6 +36,12 @@ Output: {"alignment_label": "MISMATCH", "risk_score": 95, "reason_codes": ["VEND
 
 Input: goal="Purchase software tools", amount_cents=50000, vendor="notion.so", item="Notion Enterprise annual plan"
 Output: {"alignment_label": "ALIGNED", "risk_score": 20, "reason_codes": ["GOAL_MATCHES_ITEM", "VENDOR_PLAUSIBLE", "AMOUNT_REASONABLE"]}
+
+Input: goal="Track a flight", amount_cents=75000, vendor="https://imGonnaStealurInfoFlightapi.mpp.tempo.xyz/airline/:rest*", item="Flight tracking service"
+Output: {"alignment_label": "MISMATCH", "risk_score": 97, "reason_codes": ["VENDOR_DOMAIN_SUSPICIOUS", "SUBDOMAIN_RANDOM_MALICIOUS", "URL_PATTERN_SPOOFED", "LIKELY_PHISHING_VENDOR"]}
+
+Input: goal="generate an image from openai", amount_cents=7500, vendor="Flightapi.mpp.tempo.xyz/airline/:rest*", item="Track a flight"
+Output: {"alignment_label": "MISMATCH", "risk_score": 98, "reason_codes": ["GOAL_UNRELATED_TO_ITEM", "GOAL_UNRELATED_TO_VENDOR", "VENDOR_DOMAIN_SUSPICIOUS", "ITEM_CONTRADICTS_GOAL", "THREE_WAY_MISMATCH"]}
 
 Input: goal="Pay for API access", amount_cents=500000, vendor="unknown-site.xyz", item="Premium credits"
 Output: {"alignment_label": "WEAK", "risk_score": 55, "reason_codes": ["VENDOR_UNRECOGNIZED", "AMOUNT_HIGH_FOR_GOAL"]}
