@@ -118,7 +118,9 @@ For each `POST /v1/spend-request`, AgentShield:
    - Amount over auto-approval threshold
    - Stablecoin token/network/address policy
 6. Runs **Check C (SLM Semantic)**:
-   - Goal/action alignment score and reason codes
+   - Local model (tinyllama via Ollama) classifies goal/vendor/item alignment
+   - Returns `ALIGNED`, `WEAK`, or `MISMATCH` label + reason codes
+   - Decision is label-driven only (numeric scores from small models are unreliable)
 7. Synthesizes verdict:
    - `MALICIOUS` on hard deny conditions
    - `SUSPICIOUS` on soft risk conditions
@@ -251,7 +253,7 @@ Inbound webhook for SMS providers (provider-agnostic parser endpoint).
 - `Agent` (`app/models/agent.py`)
   - Budget thresholds, blocked vendors, stablecoin policies, HITL contact
 - `SpendAuditLog` (`app/models/spend_audit_log.py`)
-  - Append-only ledger of checks/verdicts/execution metadata
+  - Ledger of checks/verdicts/execution metadata; HITL resolution updates the existing row in place (approve/deny transitions status rather than inserting a new row)
 - `PendingSpend` (`app/models/pending_spend.py`)
   - Paused requests awaiting human decision
 - `DashboardNotification` (`app/models/dashboard_notification.py`)
@@ -303,7 +305,10 @@ Migration artifacts:
 3. Start infra:
    - `docker compose -f infra/docker-compose.yml up -d`
 4. Run API:
-   - `uvicorn app.main:app --reload`
+   - `python3.11 -m uvicorn app.main:app --reload`
+5. Run dashboard:
+   - `cd dashboard && npm install && npm run dev`
+   - Dashboard available at `http://localhost:5173`
 
 ## Authentication and Signature Settings
 
