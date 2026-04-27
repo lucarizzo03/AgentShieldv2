@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     sendgrid_api_key: str = Field(default="")
     hitl_email_from: str = Field(default="")
     hitl_email_to: str = Field(default="")
+    api_public_url: str = Field(default="http://localhost:8000")
 
 
 @lru_cache(maxsize=1)
