@@ -76,6 +76,7 @@ async def spend_request(
         destination_address=payload.destination_address,
     )
 
+    settings = get_settings()
     tri = await run_financial_triangulation(
         redis=redis,
         slm_client=LocalSlmClient(),
@@ -89,6 +90,7 @@ async def spend_request(
         network=payload.network,
         destination_address=payload.destination_address,
         fingerprint=fingerprint,
+        dev_slm_preset=payload.dev_slm_preset if settings.app_env == "dev" else None,
     )
 
     now = datetime.now(timezone.utc)
@@ -165,7 +167,6 @@ async def spend_request(
         await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 403, "body": body})
         return body
 
-    settings = get_settings()
     increment("spend.verdict.suspicious")
     sms_fallback_triggered = (
         agent.hitl_primary_channel == "dashboard"

@@ -11,16 +11,24 @@ async def run_semantic_checks(
     stablecoin_symbol: str | None,
     network: str | None,
     destination_address: str | None,
+    dev_slm_preset: str | None = None,
 ) -> CheckResult:
-    result = await slm_client.semantic_alignment(
-        declared_goal=declared_goal,
-        amount_cents=amount_cents,
-        vendor_url_or_name=vendor_url_or_name,
-        item_description=item_description,
-        stablecoin_symbol=stablecoin_symbol,
-        network=network,
-        destination_address=destination_address,
-    )
+    if dev_slm_preset is not None:
+        result = {
+            "alignment_label": dev_slm_preset.upper(),
+            "risk_score": 10 if dev_slm_preset == "ALIGNED" else 55 if dev_slm_preset == "WEAK" else 85,
+            "reason_codes": ["DEV_PRESET"],
+        }
+    else:
+        result = await slm_client.semantic_alignment(
+            declared_goal=declared_goal,
+            amount_cents=amount_cents,
+            vendor_url_or_name=vendor_url_or_name,
+            item_description=item_description,
+            stablecoin_symbol=stablecoin_symbol,
+            network=network,
+            destination_address=destination_address,
+        )
 
     raw_label = result.get("alignment_label")
     alignment_label = str(raw_label).upper() if raw_label is not None else "WEAK"

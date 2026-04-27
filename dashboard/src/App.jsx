@@ -14,7 +14,6 @@ import {
 import {
   Line,
   LineChart,
-  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -117,7 +116,9 @@ export default function App() {
   const [rows, setRows] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [testRunning, setTestRunning] = useState(false);
+  const [safeRunning, setSafeRunning] = useState(false);
+  const [hitlRunning, setHitlRunning] = useState(false);
+  const [checklistRefreshing, setChecklistRefreshing] = useState(false);
   const [page, setPage] = useState("agents");
   const [filter, setFilter] = useState("All");
   const [expanded, setExpanded] = useState(null);
@@ -165,13 +166,11 @@ export default function App() {
 
   const chartData = useMemo(() => {
     const hours = [0, 4, 8, 12, 16, 20, 24];
-    const currentBucketIdx = Math.min(6, Math.floor(new Date().getHours() / 4));
-    // Past/current buckets default to 0; future buckets are null so lines stop cleanly
-    const buckets = hours.map((hour, idx) => ({
+    const buckets = hours.map((hour) => ({
       t: `${String(hour).padStart(2, "0")}:00`,
-      safe: idx <= currentBucketIdx ? 0 : null,
-      blocked: idx <= currentBucketIdx ? 0 : null,
-      pending: idx <= currentBucketIdx ? 0 : null,
+      safe: 0,
+      blocked: 0,
+      pending: 0,
     }));
     rows.forEach((row) => {
       const [h] = (row.time || "00:00:00").split(":");
@@ -370,8 +369,8 @@ export default function App() {
   };
 
   const runSafeTest = () => {
-    if (!activeAgentId || testRunning) return;
-    setTestRunning(true);
+    if (!activeAgentId || safeRunning) return;
+    setSafeRunning(true);
     toast("Running SAFE test…");
     submitSpendRequest(activeAgentId, {
       agent_id: activeAgentId,
@@ -379,22 +378,23 @@ export default function App() {
       amount_cents: 2400,
       currency: "USD",
       vendor_url_or_name: "Delta Airlines",
-      item_description: "Seat reservation",
+      item_description: "Economy seat JFK-LAX",
       asset_type: "STABLECOIN",
       stablecoin_symbol: "USDC",
       network: "base",
       destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
       idempotency_key: `quick-safe-${Date.now()}`,
+      dev_slm_preset: "ALIGNED",
     })
       .then(() => Promise.all([refresh(activeAgentId), refreshChecklist(activeAgentId)]))
       .then(() => toast("✓ SAFE test complete"))
       .catch((err) => toast(err.message || "SAFE test failed"))
-      .finally(() => setTestRunning(false));
+      .finally(() => setSafeRunning(false));
   };
 
   const runSuspiciousTest = () => {
-    if (!activeAgentId || testRunning) return;
-    setTestRunning(true);
+    if (!activeAgentId || hitlRunning) return;
+    setHitlRunning(true);
     toast("Running HITL test…");
     submitSpendRequest(activeAgentId, {
       agent_id: activeAgentId,
@@ -408,6 +408,7 @@ export default function App() {
       network: "base",
       destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
       idempotency_key: `quick-suspicious-${Date.now()}`,
+      dev_slm_preset: "WEAK",
     })
       .then(() => Promise.all([refresh(activeAgentId), refreshChecklist(activeAgentId)]))
       .then(() => {
@@ -415,7 +416,7 @@ export default function App() {
         toast("✓ HITL test submitted — approve in Approvals");
       })
       .catch((err) => toast(err.message || "Suspicious test failed"))
-      .finally(() => setTestRunning(false));
+      .finally(() => setHitlRunning(false));
   };
 
   const addBlockedVendor = () => {
@@ -677,25 +678,28 @@ print(response.status_code, response.text)`;
                   </div>
                   <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
                     <button
+                      type="button"
                       onClick={runSafeTest}
-                      disabled={testRunning}
-                      style={{ height: 30, border: `1px solid ${testRunning ? "var(--border)" : "var(--green)"}`, background: testRunning ? "transparent" : "rgba(0,200,83,0.12)", color: testRunning ? "var(--text-3)" : "var(--green)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: testRunning ? "not-allowed" : "pointer" }}
+                      disabled={safeRunning}
+                      style={{ height: 30, border: `1px solid ${safeRunning ? "var(--border)" : "var(--green)"}`, background: safeRunning ? "transparent" : "rgba(0,200,83,0.12)", color: safeRunning ? "var(--text-3)" : "var(--green)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: safeRunning ? "not-allowed" : "pointer" }}
                     >
-                      {testRunning ? "running…" : "Run SAFE Test"}
+                      {safeRunning ? "running…" : "Run SAFE Test"}
                     </button>
                     <button
+                      type="button"
                       onClick={runSuspiciousTest}
-                      disabled={testRunning}
-                      style={{ height: 30, border: `1px solid ${testRunning ? "var(--border)" : "var(--amber)"}`, background: testRunning ? "transparent" : "rgba(255,149,0,0.12)", color: testRunning ? "var(--text-3)" : "var(--amber)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: testRunning ? "not-allowed" : "pointer" }}
+                      disabled={hitlRunning}
+                      style={{ height: 30, border: `1px solid ${hitlRunning ? "var(--border)" : "var(--amber)"}`, background: hitlRunning ? "transparent" : "rgba(255,149,0,0.12)", color: hitlRunning ? "var(--text-3)" : "var(--amber)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: hitlRunning ? "not-allowed" : "pointer" }}
                     >
-                      {testRunning ? "running…" : "Run HITL Test"}
+                      {hitlRunning ? "running…" : "Run HITL Test"}
                     </button>
                     <button
-                      onClick={() => refreshChecklist(activeAgentId)}
-                      disabled={testRunning}
-                      style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: testRunning ? "var(--text-3)" : "var(--text-2)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: testRunning ? "not-allowed" : "pointer" }}
+                      type="button"
+                      onClick={async () => { setChecklistRefreshing(true); await refreshChecklist(activeAgentId).finally(() => setChecklistRefreshing(false)); }}
+                      disabled={checklistRefreshing}
+                      style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: checklistRefreshing ? "var(--text-3)" : "var(--text-2)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: checklistRefreshing ? "not-allowed" : "pointer" }}
                     >
-                      Refresh Checklist
+                      {checklistRefreshing ? "refreshing…" : "Refresh Checklist"}
                     </button>
                   </div>
                   <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
@@ -749,24 +753,28 @@ print(response.status_code, response.text)`;
               </div>
 
               <div style={{ marginTop: 16, border: "1px solid var(--border)", padding: 12 }}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                   <div style={{ fontSize: 12, color: "var(--text-2)" }}>Request Activity</div>
-                  <div style={{ display: "flex", gap: 12, fontSize: 11, color: "var(--text-3)" }}>
-                    <span style={{ color: "var(--green)" }}>— safe</span>
-                    <span style={{ color: "var(--red)" }}>— blocked</span>
-                    <span style={{ color: "var(--amber)" }}>— pending</span>
+                  <div style={{ display: "flex", gap: 14, fontSize: 11, color: "var(--text-3)" }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--green)", display: "inline-block" }} />safe</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--amber)", display: "inline-block" }} />pending</span>
+                    <span style={{ display: "flex", alignItems: "center", gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--red)", display: "inline-block" }} />blocked</span>
                   </div>
                 </div>
-                <div style={{ height: 220 }}>
+                <div style={{ height: 160 }}>
                   <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={chartData}>
-                      <XAxis dataKey="t" tick={{ fill: "var(--text-3)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <YAxis allowDecimals={false} tick={{ fill: "var(--text-3)", fontSize: 11 }} axisLine={false} tickLine={false} />
-                      <Tooltip contentStyle={{ background: "var(--bg-overlay)", border: "1px solid var(--border)" }} />
-                      <ReferenceLine y={0} stroke="var(--border)" strokeWidth={1} />
-                      <Line dataKey="safe" stroke="var(--green)" strokeWidth={1.5} dot={false} />
-                      <Line dataKey="blocked" stroke="var(--red)" strokeWidth={1.5} dot={false} />
-                      <Line dataKey="pending" stroke="var(--amber)" strokeWidth={1.5} dot={false} />
+                    <LineChart data={chartData} margin={{ top: 4, right: 4, left: -24, bottom: 0 }}>
+                      <XAxis dataKey="t" tick={{ fill: "var(--text-3)", fontSize: 10 }} axisLine={false} tickLine={false} />
+                      <YAxis allowDecimals={false} tick={{ fill: "var(--text-3)", fontSize: 10 }} axisLine={false} tickLine={false} width={24} domain={[0, (dataMax) => Math.max(dataMax + 1, 3)]} />
+                      <Tooltip
+                        cursor={{ stroke: "var(--border)", strokeWidth: 1 }}
+                        contentStyle={{ background: "var(--bg-overlay)", border: "1px solid var(--border)", fontSize: 11, fontFamily: "var(--font-mono)", padding: "4px 8px" }}
+                        itemStyle={{ color: "var(--text-2)" }}
+                        labelStyle={{ color: "var(--text-3)", marginBottom: 2 }}
+                      />
+                      <Line type="monotone" dataKey="safe" stroke="var(--green)" strokeWidth={1.5} dot={false} activeDot={{ r: 3, fill: "var(--green)", strokeWidth: 0 }} connectNulls={true} />
+                      <Line type="monotone" dataKey="pending" stroke="var(--amber)" strokeWidth={1.5} dot={false} activeDot={{ r: 3, fill: "var(--amber)", strokeWidth: 0 }} connectNulls={true} />
+                      <Line type="monotone" dataKey="blocked" stroke="var(--red)" strokeWidth={1.5} dot={false} activeDot={{ r: 3, fill: "var(--red)", strokeWidth: 0 }} connectNulls={true} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
