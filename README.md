@@ -1,7 +1,14 @@
 # AgentShield
 
-AgentShield is a **spending firewall for autonomous agents**.  
-It sits between an AI spending agent and payment rails, runs deterministic risk checks, and only allows money movement when policy is satisfied.
+AI agents are getting real spend authority. AgentShield is the firewall that sits between them and your money.
+
+Built this after my own buying agent tried to make a bad purchase. AgentShield caught it.
+
+It sits between an AI spending agent and payment rails, runs a three-layer risk check, and blocks or escalates anything suspicious before funds move.
+
+**SAFE** → executes immediately. **SUSPICIOUS** → pauses for human review. Agent waits. **MALICIOUS** → blocked.
+
+---
 
 Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with optional fiat adapter compatibility.
 
