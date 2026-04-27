@@ -16,14 +16,8 @@ from app.models.spend_audit_log import SpendAuditLog
 from app.policy.checks.quantitative import commit_budget_spend
 from app.services.hitl.sms_parser import parse_sms_decision
 from app.services.hitl.state_manager import apply_resolution, ensure_pending_is_resolvable
-from app.services.payment.stripe_adapter import StripeAdapter
-from app.services.payment.tempo_adapter import TempoAdapter
 
 router = APIRouter(tags=["hitl"])
-
-
-def _select_adapter(asset_type: str):
-    return TempoAdapter() if asset_type == "STABLECOIN" else StripeAdapter()
 
 
 async def _resolve_pending(
@@ -43,33 +37,22 @@ async def _resolve_pending(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     apply_resolution(pending, payload.decision, payload.resolver_id)
-    payment_payload = {"executed": False, "provider": None, "provider_txn_id": None}
 
     if payload.decision == "APPROVE":
         increment("hitl.decision.approve")
         original = SpendRequest.model_validate(pending.payload_json)
-        payment = await _select_adapter(original.asset_type).execute(request_id=request_id, spend_request=original)
         await commit_budget_spend(
             redis=redis,
             agent_id=original.agent_id,
             asset_type=original.asset_type,
             amount_cents=original.amount_cents,
         )
-        payment_payload = {
-            "executed": True,
-            "provider": payment["provider"],
-            "provider_txn_id": payment["provider_txn_id"],
-        }
-
         audit = session.exec(
             select(SpendAuditLog).where(SpendAuditLog.request_id == request_id)
         ).first()
         if audit:
             audit.status = "APPROVED_BY_HUMAN_EXECUTED"
             audit.verdict = "SAFE"
-            audit.payment_provider = payment["provider"]
-            audit.payment_txn_id = payment["provider_txn_id"]
-            audit.onchain_tx_hash = payment.get("onchain_tx_hash")
         else:
             audit = SpendAuditLog(
                 request_id=request_id,
@@ -88,9 +71,6 @@ async def _resolve_pending(
                 semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
                 verdict="SAFE",
                 status="APPROVED_BY_HUMAN_EXECUTED",
-                payment_provider=payment["provider"],
-                payment_txn_id=payment["provider_txn_id"],
-                onchain_tx_hash=payment.get("onchain_tx_hash"),
             )
         session.add(audit)
     else:
@@ -140,7 +120,6 @@ async def _resolve_pending(
         "status": "RESOLVED",
         "decision": payload.decision,
         "resolved_at": pending.resolved_at,
-        "payment": payment_payload,
     }
 
 
