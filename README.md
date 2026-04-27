@@ -404,7 +404,7 @@ Common commands:
 - **Twilio SMS delivery** — backend sends successfully (201 from Twilio) but trial account cannot verify recipient numbers, so texts are queued but not delivered. Requires Twilio account upgrade or toll-free verification approval.
 - **Inbound SMS resolution** — `POST /v1/hitl/sms/inbound` webhook is fully implemented but untested end-to-end without a working Twilio number and public webhook URL (ngrok or deployed)
 - **OTP phone verification via UI** — the OTP delivery is a stub (logs only); `000000` works as a dev bypass but no real SMS is sent for the verification code
-- **Payment execution** — payment adapters (`TempoAdapter`, `StripeAdapter`) are stubs; no real funds move
+- **Real payment execution** — payment adapters (`TempoAdapter`, `StripeAdapter`) return mock responses; the full execution flow runs and is logged but no real funds move
 - **Outbound HITL callbacks** — no webhook delivery back to the agent when a pending request is resolved
 - **Prometheus/OpenTelemetry export** — metrics are counted in-process only, not exported
 - **Dashboard pagination** — activity feed and notification queue have no cursor-based pagination
