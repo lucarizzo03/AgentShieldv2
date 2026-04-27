@@ -20,6 +20,7 @@ async def run_financial_triangulation(
     network: str | None,
     destination_address: str | None,
     fingerprint: str,
+    dev_slm_preset: str | None = None,
 ) -> TriangulationResult:
     quantitative = await run_quantitative_checks(
         redis=redis,
@@ -48,6 +49,7 @@ async def run_financial_triangulation(
         stablecoin_symbol=stablecoin_symbol,
         network=network,
         destination_address=destination_address,
+        dev_slm_preset=dev_slm_preset,
     )
 
     reasons = [*quantitative.reasons, *policy.reasons, *semantic.reasons]
