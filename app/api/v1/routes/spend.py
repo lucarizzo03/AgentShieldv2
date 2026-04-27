@@ -157,13 +157,6 @@ async def spend_request(
         return body
 
     increment("spend.verdict.suspicious")
-    sms_fallback_triggered = (
-        agent.hitl_primary_channel == "dashboard"
-        and agent.hitl_sms_fallback_high_risk
-        and bool(agent.hitl_phone_number)
-        and bool(agent.hitl_phone_verified_at)
-        and _is_high_risk_suspicious(tri.reasons)
-    )
 
     pending = PendingSpend(
         request_id=request_id,
@@ -177,8 +170,8 @@ async def spend_request(
             "semantic_result": tri.semantic_result,
         },
         state="WAITING_HUMAN",
-        hitl_channel="sms" if sms_fallback_triggered else "dashboard",
-        hitl_contact=agent.hitl_phone_number if sms_fallback_triggered else None,
+        hitl_channel="email+dashboard",
+        hitl_contact=None,
         expires_at=now + timedelta(seconds=settings.hitl_default_timeout_seconds),
     )
     notification = DashboardNotification(
@@ -232,16 +225,15 @@ async def spend_request(
     session.add(notification)
     session.add(audit)
     session.commit()
-    if sms_fallback_triggered:
-        await HitlNotifier().send_sms(agent=agent, pending=pending)
+    await HitlNotifier().send_notification(agent=agent, pending=pending)
 
     body = {
         "request_id": request_id,
         "status": "PENDING_HITL",
         "verdict": "SUSPICIOUS",
         "hitl": {
-            "state": "WAITING_HUMAN_TEXT_RESPONSE" if sms_fallback_triggered else "WAITING_HUMAN_REVIEW",
-            "channel": "sms" if sms_fallback_triggered else "dashboard",
+            "state": "WAITING_HUMAN_REVIEW",
+            "channel": "email+dashboard",
             "requested_at": now,
             "expires_at": pending.expires_at,
         },
