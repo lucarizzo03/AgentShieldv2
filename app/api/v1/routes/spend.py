@@ -19,15 +19,9 @@ from app.policy.checks.quantitative import commit_budget_spend, transaction_fing
 from app.policy.engine import run_financial_triangulation
 from app.services.hitl.notifier import HitlNotifier
 from app.services.idempotency import cache_idempotent_response, read_cached_idempotent_response
-from app.services.payment.stripe_adapter import StripeAdapter
-from app.services.payment.tempo_adapter import TempoAdapter
 from app.services.slm.client import LocalSlmClient
 
 router = APIRouter(tags=["spend"])
-
-
-def _select_adapter(asset_type: str):
-    return TempoAdapter() if asset_type == "STABLECOIN" else StripeAdapter()
 
 
 def _is_high_risk_suspicious(reasons: list[str]) -> bool:
@@ -96,7 +90,6 @@ async def spend_request(
     now = datetime.now(timezone.utc)
     if tri.verdict == "SAFE":
         increment("spend.verdict.safe")
-        payment = await _select_adapter(payload.asset_type).execute(request_id=request_id, spend_request=payload)
         audit = SpendAuditLog(
             request_id=request_id,
             agent_id=payload.agent_id,
@@ -114,9 +107,6 @@ async def spend_request(
             semantic_result=tri.semantic_result,
             verdict="SAFE",
             status="APPROVED_EXECUTED",
-            payment_provider=payment["provider"],
-            payment_txn_id=payment["provider_txn_id"],
-            onchain_tx_hash=payment.get("onchain_tx_hash"),
         )
         session.add(audit)
         session.commit()
@@ -127,7 +117,6 @@ async def spend_request(
             "verdict": "SAFE",
             "approved_amount_cents": payload.amount_cents,
             "currency": payload.currency,
-            "payment": payment,
             "reasons": tri.reasons,
         }
         await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 200, "body": body})

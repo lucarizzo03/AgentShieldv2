@@ -56,11 +56,8 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
 - **Persistence**
   - Postgres/SQLModel: `app/db/postgres.py`, `app/models/*`
   - Redis: `app/db/redis.py`
-- **Payment Adapters**
-  - Base interface: `app/services/payment/adapter_base.py`
-  - Stablecoin execution: `app/services/payment/tempo_adapter.py`
-  - Optional fiat execution: `app/services/payment/stripe_adapter.py`
-  - Stablecoin policy validation: `app/services/payment/stablecoin_policy.py`
+- **Stablecoin Policy**
+  - `app/services/payment/stablecoin_policy.py` — validates token/network/address against agent policy
 - **HITL Services**
   - Provider-agnostic stub notification service: `app/services/hitl/notifier.py`
   - Inbound text parser: `app/services/hitl/sms_parser.py`
@@ -404,7 +401,7 @@ Common commands:
 - **Twilio SMS delivery** — backend sends successfully (201 from Twilio) but trial account cannot verify recipient numbers, so texts are queued but not delivered. Requires Twilio account upgrade or toll-free verification approval.
 - **Inbound SMS resolution** — `POST /v1/hitl/sms/inbound` webhook is fully implemented but untested end-to-end without a working Twilio number and public webhook URL (ngrok or deployed)
 - **OTP phone verification via UI** — the OTP delivery is a stub (logs only); `000000` works as a dev bypass but no real SMS is sent for the verification code
-- **Real payment execution** — payment adapters (`TempoAdapter`, `StripeAdapter`) return mock responses; the full execution flow runs and is logged but no real funds move
+- **Payment execution** — AgentShield returns a verdict only; the calling agent is responsible for executing payment on approval. No payment adapter runs server-side.
 - **Outbound HITL callbacks** — no webhook delivery back to the agent when a pending request is resolved
 - **Prometheus/OpenTelemetry export** — metrics are counted in-process only, not exported
 - **Dashboard pagination** — activity feed and notification queue have no cursor-based pagination
