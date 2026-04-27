@@ -384,10 +384,3 @@ Common commands:
 
 - SMS sending is currently a notifier stub (`HitlNotifier`) for easy provider swap.
 - SLM integration expects local model endpoint and includes fallback behavior if unavailable.
-
-## Suggested Next Steps
-
-1. Add outbound callback delivery for resolved HITL requests.
-2. Export metrics to Prometheus/OpenTelemetry.
-3. Add pagination cursors and richer filters for dashboard queue endpoints.
-
