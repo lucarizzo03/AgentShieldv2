@@ -9,7 +9,7 @@ class HitlResolveRequest(BaseModel):
 
     decision: Literal["APPROVE", "DENY"]
     resolver_id: str = Field(min_length=2, max_length=128)
-    channel: Literal["dashboard", "sms"]
+    channel: Literal["dashboard", "sms", "email"]
     resolution_note: str | None = Field(default=None, max_length=1000)
     provider_message_id: str | None = Field(default=None, max_length=128)
 
