@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     agent_hmac_secret: str = Field(default="dev-agent-hmac-secret-change-me")
     webhook_hmac_secret: str = Field(default="dev-webhook-hmac-secret-change-me")
     sms_provider: str = Field(default="stub")
+    twilio_account_sid: str = Field(default="")
+    twilio_auth_token: str = Field(default="")
+    twilio_from_number: str = Field(default="")
 
 
 @lru_cache(maxsize=1)

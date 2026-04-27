@@ -92,3 +92,32 @@ export async function getOnboardingChecklist(agentId) {
   });
 }
 
+export async function startPhoneVerification(agentId, phoneNumber) {
+  return request(`/agents/${agentId}/contact/phone/start`, {
+    method: "POST",
+    headers: authHeaders(agentId),
+    body: JSON.stringify({ phone_number: phoneNumber }),
+  });
+}
+
+export async function verifyPhone(agentId, phoneNumber, code) {
+  return request(`/agents/${agentId}/contact/phone/verify`, {
+    method: "POST",
+    headers: authHeaders(agentId),
+    body: JSON.stringify({ phone_number: phoneNumber, code }),
+  });
+}
+
+export async function updateHitlPreferences(agentId, prefs) {
+  return request(`/agents/${agentId}/preferences/hitl`, {
+    method: "PATCH",
+    headers: authHeaders(agentId),
+    body: JSON.stringify(prefs),
+  });
+}
+
+export async function getAgent(agentId) {
+  const data = await listAgents();
+  return data.agents.find((a) => a.agent_id === agentId) || null;
+}
+

@@ -125,7 +125,7 @@ For each `POST /v1/spend-request`, AgentShield:
    - Amount over auto-approval threshold
    - Stablecoin token/network/address policy
 6. Runs **Check C (SLM Semantic)**:
-   - Local model (tinyllama via Ollama) classifies goal/vendor/item alignment
+   - Local model (`qwen2:0.5b` via Ollama) classifies goal/vendor/item alignment
    - Returns `ALIGNED`, `WEAK`, or `MISMATCH` label + reason codes
    - Decision is label-driven only (numeric scores from small models are unreliable)
 7. Synthesizes verdict:
@@ -327,7 +327,10 @@ Configure these values in `.env` for production:
 - `AGENT_HMAC_SECRET`
 - `WEBHOOK_HMAC_SECRET`
 - `SIGNATURE_TOLERANCE_SECONDS`
-- `SMS_PROVIDER` (`stub`)
+- `SMS_PROVIDER` (`stub` or `twilio`)
+- `TWILIO_ACCOUNT_SID`
+- `TWILIO_AUTH_TOKEN`
+- `TWILIO_FROM_NUMBER`
 
 Canonical HMAC message format used by the API:
 
@@ -380,7 +383,28 @@ Common commands:
 - Roll back one revision:
   - `python3.11 scripts/migrate.py downgrade -1`
 
-## Current Implementation Boundaries
+## What Is Working
 
-- SMS sending is currently a notifier stub (`HitlNotifier`) for easy provider swap.
-- SLM integration expects local model endpoint and includes fallback behavior if unavailable.
+- **Spend request pipeline** — full triangulation (Check A + B + C) on every request
+- **Verdicts** — SAFE (200), SUSPICIOUS (202), MALICIOUS (403) all firing correctly
+- **HITL dashboard** — pending approvals queue, approve/deny in-app, audit log updates in place
+- **SLM semantic check** — running locally via Ollama (`qwen2:0.5b`, 3-5s response time)
+- **Dev SLM preset** — `dev_slm_preset: "ALIGNED" | "WEAK" | "MISMATCH"` in request body bypasses Ollama in `APP_ENV=dev` for instant test results
+- **Quickstart buttons** — Run SAFE Test and Run HITL Test in the dashboard use dev preset, respond immediately
+- **Activity feed** — full audit log with Check A/B/C detail panel per transaction
+- **Overview chart** — request activity by time bucket (safe/pending/blocked lines)
+- **Stats cards** — today's totals for transactions, blocked, pending, approved (includes human-approved)
+- **Onboarding checklist** — tracks agent created, first transaction, first human decision, ready for live
+- **HMAC auth** — per-agent signed requests; dev bypass via `x-agent-key: local-dev-key`
+- **Idempotency** — Redis-cached responses prevent duplicate payment execution
+- **Twilio SMS wiring** — `SMS_PROVIDER=twilio` in `.env` sends real texts via `notifier.py`; Twilio credentials and from-number are configured
+
+## What Is Not Yet Working
+
+- **Twilio SMS delivery** — backend sends successfully (201 from Twilio) but trial account cannot verify recipient numbers, so texts are queued but not delivered. Requires Twilio account upgrade or toll-free verification approval.
+- **Inbound SMS resolution** — `POST /v1/hitl/sms/inbound` webhook is fully implemented but untested end-to-end without a working Twilio number and public webhook URL (ngrok or deployed)
+- **OTP phone verification via UI** — the OTP delivery is a stub (logs only); `000000` works as a dev bypass but no real SMS is sent for the verification code
+- **Payment execution** — payment adapters (`TempoAdapter`, `StripeAdapter`) are stubs; no real funds move
+- **Outbound HITL callbacks** — no webhook delivery back to the agent when a pending request is resolved
+- **Prometheus/OpenTelemetry export** — metrics are counted in-process only, not exported
+- **Dashboard pagination** — activity feed and notification queue have no cursor-based pagination
