@@ -23,12 +23,16 @@ import {
   bootstrapOnboarding,
   createAgent as createAgentRequest,
   getActivity,
+  getAgent,
   getDashboardStats,
   getNotifications,
   getOnboardingChecklist,
   listAgents,
   resolveRequest,
+  startPhoneVerification,
   submitSpendRequest,
+  updateHitlPreferences,
+  verifyPhone,
 } from "./lib/api";
 
 const emptyChart = [
@@ -148,6 +152,12 @@ export default function App() {
   });
   const [checklist, setChecklist] = useState(null);
   const [notes, setNotes] = useState({});
+  const [agentProfile, setAgentProfile] = useState(null);
+  const [phoneInput, setPhoneInput] = useState("");
+  const [otpInput, setOtpInput] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [smsToggle, setSmsToggle] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
 
   const pendingCount = approvals.length;
 
@@ -297,6 +307,16 @@ export default function App() {
     }, 5000);
     return () => clearInterval(timer);
   }, [activeAgentId, refresh, refreshChecklist]);
+
+  useEffect(() => {
+    if (!activeAgentId) return;
+    getAgent(activeAgentId).then((a) => {
+      if (!a) return;
+      setAgentProfile(a);
+      setSmsToggle(a.hitl_sms_fallback_high_risk || false);
+      setPhoneInput(a.hitl_phone_number || "");
+    }).catch(() => {});
+  }, [activeAgentId]);
 
   const resolve = (approvalId, decision) => {
     const ap = approvals.find((a) => String(a.id) === String(approvalId));

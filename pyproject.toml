@@ -19,6 +19,7 @@ dependencies = [
   "alembic>=1.16.5",
   "pyjwt>=2.10.1",
   "python-multipart>=0.0.20",
+  "twilio>=9.0.0",
 ]
 
 [project.optional-dependencies]
