@@ -15,6 +15,7 @@ from app.core.security import AuthContext, verify_agent_auth
 from app.db.postgres import get_session
 from app.models.agent import Agent
 from app.models.dashboard_notification import DashboardNotification
+from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
 
 router = APIRouter(tags=["dashboard"])
@@ -48,7 +49,44 @@ async def list_dashboard_notifications(
         .order_by(DashboardNotification.created_at.desc())
         .limit(limit)
     ).all()
-    return {"agent_id": agent_id, "notifications": rows}
+
+    now = datetime.now(timezone.utc)
+    active = []
+    for n in rows:
+        expires_at_str = (n.payload_json or {}).get("expires_at")
+        expired = False
+        if expires_at_str:
+            try:
+                exp = datetime.fromisoformat(expires_at_str)
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                expired = exp < now
+            except (ValueError, TypeError):
+                pass
+
+        if expired:
+            n.status = "DISMISSED"
+            n.updated_at = now
+            session.add(n)
+            audit = session.exec(
+                select(SpendAuditLog).where(SpendAuditLog.request_id == n.request_id)
+            ).first()
+            if audit and audit.status == "PENDING_HITL":
+                audit.status = "EXPIRED"
+                session.add(audit)
+            pending = session.exec(
+                select(PendingSpend).where(PendingSpend.request_id == n.request_id)
+            ).first()
+            if pending and pending.state == "WAITING_HUMAN":
+                pending.state = "EXPIRED"
+                session.add(pending)
+        else:
+            active.append(n)
+
+    if len(active) < len(rows):
+        session.commit()
+
+    return {"agent_id": agent_id, "notifications": active}
 
 
 @router.patch(
@@ -119,10 +157,10 @@ async def list_agent_activity(
                 "network": row.network,
                 "declared_goal": row.declared_goal,
                 "reason": (
-                    ((row.semantic_result or {}).get("reason_codes") or [None])[0]
-                    if isinstance(row.semantic_result, dict)
-                    else None
-                ),
+                    lambda rc: rc.get("code", str(rc)) if isinstance(rc, dict) else rc
+                )(((row.semantic_result or {}).get("reason_codes") or [None])[0])
+                if isinstance(row.semantic_result, dict)
+                else None,
                 "quantitative_result": row.quantitative_result,
                 "policy_result": row.policy_result,
                 "semantic_result": row.semantic_result,

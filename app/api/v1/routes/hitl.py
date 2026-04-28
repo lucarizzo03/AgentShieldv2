@@ -1,11 +1,15 @@
 import hashlib
 import hmac as _hmac
+import logging
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 from redis.asyncio import Redis
 from sqlmodel import Session, select
+
+logger = logging.getLogger(__name__)
 
 from app.api.v1.schemas.hitl import HitlResolveRequest
 from app.api.v1.schemas.spend import SpendRequest
@@ -161,6 +165,23 @@ async def _resolve_pending(
 
     session.add(pending)
     session.commit()
+
+    callback_url = pending.payload_json.get("agent_callback_url")
+    if callback_url:
+        callback_body = {
+            "request_id": request_id,
+            "decision": payload.decision,
+            "status": "APPROVED_BY_HUMAN_EXECUTED" if payload.decision == "APPROVE" else "DENIED_BY_HUMAN",
+            "verdict": "SAFE" if payload.decision == "APPROVE" else "MALICIOUS",
+            "resolved_at": pending.resolved_at.isoformat() if pending.resolved_at else None,
+        }
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.post(callback_url, json=callback_body, timeout=10)
+            logger.info("HITL callback delivered", extra={"request_id": request_id, "url": callback_url})
+        except Exception as exc:
+            logger.warning("HITL callback failed", extra={"request_id": request_id, "url": callback_url, "error": str(exc)})
+
     return {
         "request_id": request_id,
         "status": "RESOLVED",
