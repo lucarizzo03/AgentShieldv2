@@ -28,86 +28,87 @@ def _build_html(
     approve_url: str,
     deny_url: str,
 ) -> str:
-    reason_pills = "".join(
-        f'<span style="display:inline-block;margin:2px 4px 2px 0;padding:3px 10px;background:#fef3c7;color:#92400e;border-radius:12px;font-size:12px;font-family:monospace">{r}</span>'
+    reason_tags = "".join(
+        f'<span style="display:inline-block;margin:0 6px 6px 0;padding:4px 10px;background:#f1f5f9;color:#475569;border-radius:4px;font-size:11px;font-family:monospace;letter-spacing:0.02em">{r}</span>'
         for r in reasons
     )
     return f"""<!DOCTYPE html>
 <html>
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5;padding:40px 0">
+<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;padding:48px 0">
     <tr><td align="center">
-      <table width="560" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 8px 24px rgba(0,0,0,0.10)">
+      <table width="520" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:8px;border:1px solid #e2e8f0">
 
         <!-- Header -->
         <tr>
-          <td style="background:#0f172a;padding:28px 36px">
-            <p style="margin:0;font-size:13px;color:#94a3b8;letter-spacing:0.08em;text-transform:uppercase">AgentShield</p>
-            <h1 style="margin:6px 0 0;font-size:22px;font-weight:700;color:#ffffff">Approval Required</h1>
-          </td>
-        </tr>
-
-        <!-- Amount -->
-        <tr>
-          <td style="padding:32px 36px 24px;border-bottom:1px solid #f1f5f9">
-            <p style="margin:0 0 4px;font-size:13px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em">Amount</p>
-            <p style="margin:0;font-size:36px;font-weight:700;color:#0f172a">${amount_usd:.2f} <span style="font-size:18px;color:#64748b">USD</span></p>
-            <p style="margin:8px 0 0;font-size:16px;color:#334155">to <strong>{vendor}</strong></p>
+          <td style="padding:32px 40px 28px;border-bottom:1px solid #e2e8f0">
+            <p style="margin:0 0 16px;font-size:12px;font-weight:600;color:#94a3b8;letter-spacing:0.1em;text-transform:uppercase">AgentShield</p>
+            <p style="margin:0 0 4px;font-size:24px;font-weight:700;color:#0f172a;line-height:1.2">${amount_usd:.2f} <span style="color:#94a3b8;font-weight:400;font-size:18px">USD</span></p>
+            <p style="margin:6px 0 0;font-size:14px;color:#64748b">Pending approval &mdash; payment to <strong style="color:#334155">{vendor}</strong></p>
           </td>
         </tr>
 
         <!-- Details -->
         <tr>
-          <td style="padding:24px 36px;border-bottom:1px solid #f1f5f9">
+          <td style="padding:24px 40px;border-bottom:1px solid #e2e8f0">
             <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
-                <td style="padding:6px 0;width:120px;font-size:13px;color:#94a3b8;vertical-align:top">Goal</td>
-                <td style="padding:6px 0;font-size:14px;color:#1e293b">{goal}</td>
+                <td style="padding:5px 0;width:96px;font-size:12px;color:#94a3b8;vertical-align:top;text-transform:uppercase;letter-spacing:0.06em;font-weight:500">Goal</td>
+                <td style="padding:5px 0;font-size:13px;color:#334155;line-height:1.5">{goal}</td>
               </tr>
               <tr>
-                <td style="padding:6px 0;font-size:13px;color:#94a3b8;vertical-align:top">Item</td>
-                <td style="padding:6px 0;font-size:14px;color:#1e293b">{item}</td>
+                <td style="padding:5px 0;font-size:12px;color:#94a3b8;vertical-align:top;text-transform:uppercase;letter-spacing:0.06em;font-weight:500">Item</td>
+                <td style="padding:5px 0;font-size:13px;color:#334155;line-height:1.5">{item}</td>
               </tr>
               <tr>
-                <td style="padding:6px 0;font-size:13px;color:#94a3b8;vertical-align:top">Request ID</td>
-                <td style="padding:6px 0;font-size:13px;color:#1e293b;font-family:monospace">{request_id}</td>
+                <td style="padding:5px 0;font-size:12px;color:#94a3b8;vertical-align:top;text-transform:uppercase;letter-spacing:0.06em;font-weight:500">Expires</td>
+                <td style="padding:5px 0;font-size:13px;color:#334155">{expires_at}</td>
               </tr>
               <tr>
-                <td style="padding:6px 0;font-size:13px;color:#94a3b8;vertical-align:top">Expires</td>
-                <td style="padding:6px 0;font-size:13px;color:#1e293b">{expires_at}</td>
+                <td style="padding:5px 0;font-size:12px;color:#94a3b8;vertical-align:top;text-transform:uppercase;letter-spacing:0.06em;font-weight:500">ID</td>
+                <td style="padding:5px 0;font-size:11px;color:#94a3b8;font-family:monospace">{request_id}</td>
               </tr>
             </table>
           </td>
         </tr>
 
-        <!-- Reasons -->
+        <!-- Risk flags -->
         <tr>
-          <td style="padding:20px 36px;border-bottom:1px solid #f1f5f9">
-            <p style="margin:0 0 10px;font-size:13px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em">Risk Flags</p>
-            <div>{reason_pills}</div>
+          <td style="padding:20px 40px;border-bottom:1px solid #e2e8f0">
+            <p style="margin:0 0 10px;font-size:12px;font-weight:500;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em">Risk flags</p>
+            <div>{reason_tags}</div>
           </td>
         </tr>
 
-        <!-- CTA -->
+        <!-- Buttons -->
         <tr>
-          <td style="padding:28px 36px">
-            <p style="margin:0 0 20px;font-size:14px;color:#475569">Tap to decide — the agent is paused until you respond:</p>
-            <table cellpadding="0" cellspacing="0">
+          <td style="padding:28px 40px 32px">
+            <table width="100%" cellpadding="0" cellspacing="0">
               <tr>
-                <td style="padding-right:12px">
-                  <a href="{approve_url}" style="display:inline-block;padding:14px 32px;background:#16a34a;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;border-radius:8px">Approve</a>
+                <td style="padding-right:8px" width="50%">
+                  <a href="{approve_url}" style="display:block;padding:13px 0;background:#0f172a;color:#ffffff;font-size:13px;font-weight:600;text-decoration:none;border-radius:6px;text-align:center;letter-spacing:0.02em">Approve</a>
                 </td>
-                <td>
-                  <a href="{deny_url}" style="display:inline-block;padding:14px 32px;background:#dc2626;color:#ffffff;font-size:15px;font-weight:600;text-decoration:none;border-radius:8px">Deny</a>
+                <td style="padding-left:8px" width="50%">
+                  <a href="{deny_url}" style="display:block;padding:13px 0;background:#ffffff;color:#dc2626;font-size:13px;font-weight:600;text-decoration:none;border-radius:6px;text-align:center;letter-spacing:0.02em;border:1px solid #fca5a5">Deny</a>
                 </td>
               </tr>
             </table>
-            <p style="margin:20px 0 0;font-size:12px;color:#94a3b8">Each link is single-use and tied to this request only.</p>
           </td>
         </tr>
 
       </table>
+
+      <!-- Footer -->
+      <table width="520" cellpadding="0" cellspacing="0" style="margin-top:20px">
+        <tr>
+          <td style="text-align:center;font-size:11px;color:#94a3b8;line-height:1.6">
+            This request will expire automatically if no action is taken.<br>
+            AgentShield &mdash; AI spend control
+          </td>
+        </tr>
+      </table>
+
     </td></tr>
   </table>
 </body>

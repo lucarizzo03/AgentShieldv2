@@ -61,12 +61,11 @@ function buildChecklistRows(payload, prefix) {
 }
 
 const nav = [
-  { key: "integration", label: "Integration", icon: ArrowUpRight },
-  { key: "quickstart", label: "Quickstart", icon: Clock3 },
+  { key: "agents", label: "Agents", icon: Plus },
   { key: "overview", label: "Overview", icon: Home },
   { key: "activity", label: "Activity", icon: Activity },
   { key: "approvals", label: "Approvals", icon: AlertTriangle, pending: true },
-  { key: "agents", label: "Agents", icon: Plus },
+  { key: "integration", label: "Integration", icon: ArrowUpRight },
   { key: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -116,6 +115,7 @@ function Toasts({ toasts }) {
 export default function App() {
   const [agents, setAgents] = useState([]);
   const [activeAgentId, setActiveAgentId] = useState("");
+  const [allAgents, setAllAgents] = useState([]);
   const [stats, setStats] = useState({ total: 0, blocked: 0, pending: 0, approved: 0 });
   const [rows, setRows] = useState([]);
   const [approvals, setApprovals] = useState([]);
@@ -130,9 +130,10 @@ export default function App() {
   const [toasts, setToasts] = useState([]);
   const [showSuccess, setShowSuccess] = useState(false);
   const [secretReveal, setSecretReveal] = useState(false);
-  const [creds, setCreds] = useState({
-    agentId: "agt_01j9xk2m4p8q3r7s",
-    hmac: "sk_live_a8f3k9q7v1z2t4m6n8",
+  const [showNewAgentForm, setShowNewAgentForm] = useState(false);
+  const [credsMap, setCredsMap] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("agentshield_creds_map")) || {}; }
+    catch { return {}; }
   });
   const [form, setForm] = useState({
     name: "",
@@ -193,7 +194,7 @@ export default function App() {
   }, [rows]);
 
   const refresh = useCallback(
-    async (agentId) => {
+    async (agentId, silent = false) => {
       if (!agentId) return;
       const [statsResp, activityResp, notificationResp] = await Promise.all([
         getDashboardStats(agentId),
@@ -206,40 +207,39 @@ export default function App() {
         pending: statsResp.pending_approval,
         approved: statsResp.auto_approved,
       });
-      setRows(
-        activityResp.activity.map((item) => {
-          const slm = item.semantic_result || {};
-          return {
-            id: item.request_id,
-            time: new Date(item.created_at).toLocaleTimeString("en-US", { hour12: false }),
-            status: normalizeStatus(item.status),
-            agent: agentId,
-            vendor: item.vendor_url_or_name,
-            amount: item.amount_cents / 100,
-            asset: item.asset_type === "STABLECOIN" ? item.stablecoin_symbol || "USDC" : item.currency,
-            network: item.network || "n/a",
-            goal: item.declared_goal,
-            reason: item.reason || item.verdict,
-            details: {
-              redis: buildChecklistRows(item.quantitative_result, ""),
-              policy: buildChecklistRows(item.policy_result, ""),
-              slm: {
-                score: +(1 - Number(slm.risk_score ?? 50) / 100).toFixed(2),
-                verdict: slm.alignment_label || item.verdict,
-                reason: (slm.reason_codes || []).join(", ") || "No reason supplied",
-              },
-              raw: {
-                request_id: item.request_id,
-                declared_goal: item.declared_goal,
-                amount_cents: item.amount_cents,
-                currency: item.currency,
-                vendor_url_or_name: item.vendor_url_or_name,
-                network: item.network,
-              },
+      const newRows = activityResp.activity.map((item) => {
+        const slm = item.semantic_result || {};
+        return {
+          id: item.request_id,
+          time: new Date(item.created_at).toLocaleTimeString("en-US", { hour12: false }),
+          status: normalizeStatus(item.status),
+          agent: agentId,
+          vendor: item.vendor_url_or_name,
+          amount: item.amount_cents / 100,
+          asset: item.asset_type === "STABLECOIN" ? item.stablecoin_symbol || "USDC" : item.currency,
+          network: item.network || "n/a",
+          goal: item.declared_goal,
+          reason: item.reason || item.verdict,
+          details: {
+            redis: buildChecklistRows(item.quantitative_result, ""),
+            policy: buildChecklistRows(item.policy_result, ""),
+            slm: {
+              score: +(1 - Number(slm.risk_score ?? 50) / 100).toFixed(2),
+              verdict: slm.alignment_label || item.verdict,
+              reason: (slm.reason_codes || []).join(", ") || "No reason supplied",
             },
-          };
-        })
-      );
+            raw: {
+              request_id: item.request_id,
+              declared_goal: item.declared_goal,
+              amount_cents: item.amount_cents,
+              currency: item.currency,
+              vendor_url_or_name: item.vendor_url_or_name,
+              network: item.network,
+            },
+          },
+        };
+      });
+      setRows(() => newRows);
       setApprovals(
         notificationResp.notifications.map((n) => {
           const payload = n.payload_json || {};
@@ -282,14 +282,19 @@ export default function App() {
       try {
         const data = await listAgents();
         setAgents(data.agents);
+        setAllAgents(data.agents);
         if (data.agents.length > 0) {
-          const first = data.agents[0].agent_id;
+          const storedMap = (() => { try { return JSON.parse(localStorage.getItem("agentshield_creds_map") || "{}"); } catch { return {}; } })();
+          const match = Object.keys(storedMap).find((id) => data.agents.find((a) => a.agent_id === id));
+          const first = match || data.agents[0].agent_id;
           setActiveAgentId(first);
           setPage("integration");
-          await refresh(first);
+          await refresh(first, true);
           await refreshChecklist(first);
         } else {
-          setPage("quickstart");
+          localStorage.removeItem("agentshield_creds_map");
+          setCredsMap({});
+          setPage("agents");
         }
       } catch (err) {
         toast(err.message || "Unable to load agents");
@@ -304,7 +309,7 @@ export default function App() {
     if (!activeAgentId) return;
     const timer = setInterval(() => {
       refresh(activeAgentId).catch(() => {});
-    }, 5000);
+    }, 2000);
     return () => clearInterval(timer);
   }, [activeAgentId, refresh, refreshChecklist]);
 
@@ -333,26 +338,30 @@ export default function App() {
   const handleCreateAgent = (e) => {
     e.preventDefault();
     if (loading) return;
-    if (!form.name || !form.daily || !form.perTx || !form.auto) return;
+    if (!form.name || form.daily === "" || form.perTx === "" || form.auto === "") return;
     createAgentRequest({
       agent_name: form.name,
       daily_spend_limit_usd: Number(form.daily),
       per_transaction_limit_usd: Number(form.perTx),
       auto_approve_under_usd: Number(form.auto),
-      blocked_vendors: form.blocked.length ? form.blocked : ["unknown-vendor"],
+      blocked_vendors: form.blocked,
       asset_type: form.asset,
       allowed_networks: form.networks,
       allowed_tokens: form.tokens,
     })
       .then(async (res) => {
+        setCredsMap((prev) => {
+          const next = { ...prev, [res.agent_id]: res.hmac_secret };
+          localStorage.setItem("agentshield_creds_map", JSON.stringify(next));
+          return next;
+        });
         setShowSuccess(true);
-        setCreds({ agentId: res.agent_id, hmac: res.hmac_secret });
         const data = await listAgents();
         setAgents(data.agents);
+        setAllAgents(data.agents);
         setActiveAgentId(res.agent_id);
-        await refresh(res.agent_id);
+        await refresh(res.agent_id, true);
         await refreshChecklist(res.agent_id);
-        setPage("integration");
       })
       .catch((err) => toast(err.message || "Create agent failed"));
   };
@@ -375,15 +384,20 @@ export default function App() {
       blocked_vendors: ["badvendor.example"],
     })
       .then(async (res) => {
+        setCredsMap((prev) => {
+          const next = { ...prev, [res.agent_id]: res.hmac_secret };
+          localStorage.setItem("agentshield_creds_map", JSON.stringify(next));
+          return next;
+        });
         setShowSuccess(true);
-        setCreds({ agentId: res.agent_id, hmac: res.hmac_secret });
+        setShowNewAgentForm(false);
         const data = await listAgents();
         setAgents(data.agents);
+        setAllAgents(data.agents);
         setActiveAgentId(res.agent_id);
-        await refresh(res.agent_id);
+        await refresh(res.agent_id, true);
         await refreshChecklist(res.agent_id);
-        setPage("integration");
-        toast("Quickstart bootstrap complete");
+        toast("Agent created");
       })
       .catch((err) => toast(err.message || "Bootstrap failed"));
   };
@@ -395,7 +409,7 @@ export default function App() {
     submitSpendRequest(activeAgentId, {
       agent_id: activeAgentId,
       declared_goal: "Book flight to NYC conference",
-      amount_cents: 2400,
+      amount_cents: 100,
       currency: "USD",
       vendor_url_or_name: "Delta Airlines",
       item_description: "Economy seat JFK-LAX",
@@ -406,7 +420,7 @@ export default function App() {
       idempotency_key: `quick-safe-${Date.now()}`,
       dev_slm_preset: "ALIGNED",
     })
-      .then(() => Promise.all([refresh(activeAgentId), refreshChecklist(activeAgentId)]))
+      .then(() => Promise.all([refresh(activeAgentId, true), refreshChecklist(activeAgentId)]))
       .then(() => toast("✓ SAFE test complete"))
       .catch((err) => toast(err.message || "SAFE test failed"))
       .finally(() => setSafeRunning(false));
@@ -419,7 +433,7 @@ export default function App() {
     submitSpendRequest(activeAgentId, {
       agent_id: activeAgentId,
       declared_goal: "Book flight to NYC conference",
-      amount_cents: 8900,
+      amount_cents: 500,
       currency: "USD",
       vendor_url_or_name: "Uber Eats",
       item_description: "Large dinner order",
@@ -430,7 +444,7 @@ export default function App() {
       idempotency_key: `quick-suspicious-${Date.now()}`,
       dev_slm_preset: "WEAK",
     })
-      .then(() => Promise.all([refresh(activeAgentId), refreshChecklist(activeAgentId)]))
+      .then(() => Promise.all([refresh(activeAgentId, true), refreshChecklist(activeAgentId)]))
       .then(() => {
         setPage("approvals");
         toast("✓ HITL test submitted — approve in Approvals");
@@ -445,8 +459,9 @@ export default function App() {
     setForm((p) => ({ ...p, blocked: Array.from(new Set([...p.blocked, v])), draftVendor: "" }));
   };
 
-  const effectiveAgentId = activeAgentId || creds.agentId || "agt_your_agent_id";
-  const effectiveSecret = secretReveal ? creds.hmac : "<your-hmac-secret>";
+  const effectiveAgentId = activeAgentId || "agt_your_agent_id";
+  const activeHmac = credsMap[activeAgentId] || "";
+  const effectiveSecret = secretReveal ? (activeHmac || "<your-hmac-secret>") : "<your-hmac-secret>";
   const apiBase = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/v1";
   const integrationPython = `import hashlib
 import hmac
@@ -590,7 +605,7 @@ print(response.status_code, response.text)`;
                 value={activeAgentId}
                 onChange={(e) => {
                   setActiveAgentId(e.target.value);
-                  refresh(e.target.value).catch(() => {});
+                  refresh(e.target.value, true).catch(() => {});
                   refreshChecklist(e.target.value).catch(() => {});
                 }}
                 style={{ background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-2)", height: 28, fontSize: 12, padding: "0 8px", fontFamily: "var(--font-mono)" }}
@@ -602,7 +617,6 @@ print(response.status_code, response.text)`;
                 ))}
               </select>
             ) : null}
-            <div style={{ fontSize: 12, color: "var(--text-2)" }}>{page === "activity" ? "↑ Export" : ""}</div>
           </div>
         </header>
 
@@ -653,107 +667,6 @@ print(response.status_code, response.text)`;
             </div>
           ) : null}
 
-          {page === "quickstart" ? (
-            <div style={{ maxWidth: 780 }}>
-              <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
-                <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)", marginBottom: 8 }}>
-                  5-Minute Onboarding
-                </div>
-                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>
-                  Create your first agent, run one SAFE and one HITL test, then approve once.
-                </div>
-                <form onSubmit={runQuickstartBootstrap} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 8 }}>
-                  <input
-                    value={quickstartForm.userName}
-                    onChange={(e) => setQuickstartForm((p) => ({ ...p, userName: e.target.value }))}
-                    placeholder="your name"
-                    style={{ height: 32, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
-                  />
-                  <input
-                    value={quickstartForm.email}
-                    onChange={(e) => setQuickstartForm((p) => ({ ...p, email: e.target.value }))}
-                    placeholder="email"
-                    style={{ height: 32, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
-                  />
-                  <input
-                    value={quickstartForm.agentName}
-                    onChange={(e) => setQuickstartForm((p) => ({ ...p, agentName: e.target.value }))}
-                    placeholder="agent name"
-                    style={{ height: 32, border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-1)", padding: "0 8px", fontSize: 12, fontFamily: "var(--font-mono)" }}
-                  />
-                  <button
-                    type="submit"
-                    style={{ height: 32, border: "1px solid var(--text-1)", background: "var(--text-1)", color: "var(--bg)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 12, cursor: "pointer" }}
-                  >
-                    Bootstrap
-                  </button>
-                </form>
-              </div>
-
-              {activeAgentId ? (
-                <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
-                  <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 2 }}>Developer Tools</div>
-                  <div style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 10 }}>
-                    These actions simulate external agent calls for onboarding and testing.
-                  </div>
-                  <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                    <button
-                      type="button"
-                      onClick={runSafeTest}
-                      disabled={safeRunning}
-                      style={{ height: 30, border: `1px solid ${safeRunning ? "var(--border)" : "var(--green)"}`, background: safeRunning ? "transparent" : "rgba(0,200,83,0.12)", color: safeRunning ? "var(--text-3)" : "var(--green)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: safeRunning ? "not-allowed" : "pointer" }}
-                    >
-                      {safeRunning ? "running…" : "Run SAFE Test"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={runSuspiciousTest}
-                      disabled={hitlRunning}
-                      style={{ height: 30, border: `1px solid ${hitlRunning ? "var(--border)" : "var(--amber)"}`, background: hitlRunning ? "transparent" : "rgba(255,149,0,0.12)", color: hitlRunning ? "var(--text-3)" : "var(--amber)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: hitlRunning ? "not-allowed" : "pointer" }}
-                    >
-                      {hitlRunning ? "running…" : "Run HITL Test"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={async () => { setChecklistRefreshing(true); await refreshChecklist(activeAgentId).finally(() => setChecklistRefreshing(false)); }}
-                      disabled={checklistRefreshing}
-                      style={{ height: 30, border: "1px solid var(--border)", background: "var(--bg-raised)", color: checklistRefreshing ? "var(--text-3)" : "var(--text-2)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: checklistRefreshing ? "not-allowed" : "pointer" }}
-                    >
-                      {checklistRefreshing ? "refreshing…" : "Refresh Checklist"}
-                    </button>
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
-                    active_agent: {activeAgentId}
-                  </div>
-                </div>
-              ) : null}
-
-              <div style={{ border: "1px solid var(--border)", padding: 12 }}>
-                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>Readiness</div>
-                {checklist ? (
-                  <>
-                    {[
-                      ["Agent created", checklist.agent_created],
-                      ["First transaction submitted", checklist.first_transaction_submitted],
-                      ["First human decision made", checklist.human_decision_made],
-                    ].map(([label, ok]) => (
-                      <div key={label} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
-                        <span style={{ fontSize: 12, color: "var(--text-1)" }}>{label}</span>
-                        <span style={{ fontSize: 11, color: ok ? "var(--green)" : "var(--amber)", fontFamily: "var(--font-mono)" }}>
-                          {ok ? "DONE" : "PENDING"}
-                        </span>
-                      </div>
-                    ))}
-                    <div style={{ marginTop: 10, fontSize: 12, color: checklist.ready_for_live ? "var(--green)" : "var(--text-2)", fontFamily: "var(--font-mono)" }}>
-                      {checklist.ready_for_live ? "READY FOR LIVE AGENT TRAFFIC" : "Complete the checklist to go live"}
-                    </div>
-                  </>
-                ) : (
-                  <div style={{ fontSize: 12, color: "var(--text-3)" }}>No checklist yet. Bootstrap an agent first.</div>
-                )}
-              </div>
-            </div>
-          ) : null}
 
           {page === "overview" ? (
             <>
@@ -838,7 +751,6 @@ print(response.status_code, response.text)`;
                     </button>
                   ))}
                 </div>
-                <div style={{ fontSize: 12, color: "var(--text-2)" }}>↑ Export</div>
               </div>
               <div style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "82px 92px 112px 1fr 116px 78px 1fr 20px", padding: "6px 12px", fontSize: 11, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
@@ -1001,14 +913,44 @@ print(response.status_code, response.text)`;
 
           {page === "agents" ? (
             <div style={{ maxWidth: 560 }}>
-              <div style={{ marginBottom: 12, fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)" }}>Register Agent</div>
+              {activeAgentId && activeHmac && !showNewAgentForm ? (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                    <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)" }}>Active Agent</div>
+                    <button type="button" onClick={() => { setShowNewAgentForm(true); setShowSuccess(false); }} style={{ height: 28, border: "1px solid var(--border)", background: "transparent", color: "var(--text-2)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}>+ New Agent</button>
+                  </div>
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>agent_id</div>
+                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                      <span>{activeAgentId}</span>
+                      <button onClick={() => navigator.clipboard.writeText(activeAgentId)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
+                    </div>
+                  </div>
+                  <div style={{ marginBottom: 16 }}>
+                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>hmac_secret</div>
+                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                      <span>{secretReveal ? activeHmac : "•••••••••••••••••••••••••••"}</span>
+                      <div style={{ display: "flex", gap: 8 }}>
+                        <button onClick={() => navigator.clipboard.writeText(activeHmac)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
+                        <button onClick={() => setSecretReveal(p => !p)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[{secretReveal ? "hide" : "reveal"}]</button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              ) : null}
+              {(!activeAgentId || !activeHmac || showNewAgentForm) ? (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                    <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)" }}>New Agent</div>
+                    {activeHmac && <button type="button" onClick={() => { setShowNewAgentForm(false); setShowSuccess(false); }} style={{ height: 28, border: "none", background: "transparent", color: "var(--text-2)", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}>← Back</button>}
+                  </div>
               {!showSuccess ? (
                 <form onSubmit={handleCreateAgent}>
                   {[
                     ["Agent Name", "name", "my-booking-agent", false, null],
-                    ["Daily Spend Limit", "daily", "500", true, "Max total USD the agent can spend per day"],
-                    ["Per-Transaction Limit", "perTx", "200", true, "Max USD allowed per single transaction"],
-                    ["Auto-Approve Under", "auto", "25", true, "Transactions below this USD amount skip HITL review"],
+                    ["Daily Spend Limit", "daily", "500", true, "Max total USD per day. Set 0 for no limit."],
+                    ["Per-Transaction Limit", "perTx", "200", true, "Max USD per transaction. Set 0 for no limit."],
+                    ["Auto-Approve Under", "auto", "25", true, "Transactions below this USD amount skip HITL review. Set 0 to require review for all."],
                   ].map(([label, key, ph, numeric, hint]) => (
                     <div key={key} style={{ marginBottom: 12 }}>
                       <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
@@ -1019,7 +961,7 @@ print(response.status_code, response.text)`;
                         {numeric ? <span style={{ position: "absolute", left: 10, fontSize: 13, color: "var(--text-2)", fontFamily: "var(--font-mono)", pointerEvents: "none" }}>$</span> : null}
                         <input
                           type={numeric ? "number" : "text"}
-                          min={numeric ? 1 : undefined}
+                          min={numeric ? 0 : undefined}
                           step={numeric ? 1 : undefined}
                           value={form[key]}
                           placeholder={ph}
@@ -1092,32 +1034,51 @@ print(response.status_code, response.text)`;
                   <div style={{ marginBottom: 10 }}>
                     <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>agent_id</div>
                     <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                      <span>{creds.agentId}</span>
-                      <button onClick={() => navigator.clipboard.writeText(creds.agentId)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
+                      <span>{activeAgentId}</span>
+                      <button onClick={() => navigator.clipboard.writeText(activeAgentId)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
                     </div>
                   </div>
                   <div style={{ marginBottom: 10 }}>
                     <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>hmac_secret</div>
                     <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                      <span>{secretReveal ? creds.hmac : "•••••••••••••••••••••••••••"}</span>
+                      <span>{secretReveal ? activeHmac : "•••••••••••••••••••••••••••"}</span>
                       <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={() => navigator.clipboard.writeText(creds.hmac)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
+                        <button onClick={() => navigator.clipboard.writeText(activeHmac)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
                         <button onClick={() => setSecretReveal((p) => !p)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[reveal]</button>
                       </div>
                     </div>
                   </div>
                   <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Integration</div>
                   <div style={{ border: "1px solid var(--border)", background: "var(--bg-overlay)", padding: "8px 10px", fontFamily: "var(--font-mono)", fontSize: 12, position: "relative" }}>
-                    <button onClick={() => navigator.clipboard.writeText(`curl -X POST https://api.agentshield.com/v1/spend-request -H "x-agent-id: ${creds.agentId}" -H "x-signature: <hmac>" -d '{"declared_goal":"...","amount_cents":4900}'`)} style={{ position: "absolute", right: 8, top: 8, border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
+                    <button onClick={() => navigator.clipboard.writeText(`curl -X POST https://api.agentshield.com/v1/spend-request -H "x-agent-id: ${activeAgentId}" -H "x-signature: <hmac>" -d '{"declared_goal":"...","amount_cents":4900}'`)} style={{ position: "absolute", right: 8, top: 8, border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
                     <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{`curl -X POST \\
   https://api.agentshield.com/v1/spend-request \\
-  -H "x-agent-id: ${creds.agentId}" \\
+  -H "x-agent-id: ${activeAgentId}" \\
   -H "x-signature: <hmac>" \\
   -d '{"declared_goal":"...","amount_cents":4900}'`}</pre>
                   </div>
                   <button onClick={() => setPage("activity")} style={{ marginTop: 10, border: "none", background: "transparent", color: "var(--text-2)", fontSize: 12, cursor: "pointer" }}>
                     → View Activity
                   </button>
+                </div>
+              )}
+                </>
+              ) : null}
+
+              {activeAgentId && (
+                <div style={{ border: "1px solid var(--border)", padding: 12, marginTop: 16 }}>
+                  <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>Developer Tools</div>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                    <button type="button" onClick={runSafeTest} disabled={safeRunning}
+                      style={{ height: 30, border: `1px solid ${safeRunning ? "var(--border)" : "var(--green)"}`, background: safeRunning ? "transparent" : "rgba(0,200,83,0.12)", color: safeRunning ? "var(--text-3)" : "var(--green)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: safeRunning ? "not-allowed" : "pointer" }}>
+                      {safeRunning ? "running…" : "Run SAFE Test"}
+                    </button>
+                    <button type="button" onClick={runSuspiciousTest} disabled={hitlRunning}
+                      style={{ height: 30, border: `1px solid ${hitlRunning ? "var(--border)" : "var(--amber)"}`, background: hitlRunning ? "transparent" : "rgba(255,149,0,0.12)", color: hitlRunning ? "var(--text-3)" : "var(--amber)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: hitlRunning ? "not-allowed" : "pointer" }}>
+                      {hitlRunning ? "running…" : "Run HITL Test"}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>active_agent: {activeAgentId}</div>
                 </div>
               )}
             </div>

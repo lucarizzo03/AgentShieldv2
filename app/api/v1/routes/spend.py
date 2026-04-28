@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from redis.asyncio import Redis
 from sqlmodel import Session, select
 
@@ -243,4 +243,51 @@ async def spend_request(
     response.status_code = status.HTTP_202_ACCEPTED
     await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 202, "body": body})
     return body
+
+
+@router.get("/spend-request/{request_id}/status")
+async def get_spend_request_status(
+    request_id: str,
+    auth_context: AuthContext = Depends(verify_agent_auth),
+    session: Session = Depends(get_session),
+):
+    audit = session.exec(select(SpendAuditLog).where(SpendAuditLog.request_id == request_id)).first()
+    if not audit:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
+
+    if auth_context.agent_id and auth_context.agent_id != audit.agent_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    if audit.status == "APPROVED_BY_HUMAN_EXECUTED":
+        return {
+            "request_id": request_id,
+            "status": "APPROVED_BY_HUMAN_EXECUTED",
+            "verdict": "SAFE",
+            "decision": "APPROVE",
+            "resolved": True,
+        }
+    elif audit.status == "DENIED_BY_HUMAN":
+        return {
+            "request_id": request_id,
+            "status": "DENIED_BY_HUMAN",
+            "verdict": "MALICIOUS",
+            "decision": "DENY",
+            "resolved": True,
+        }
+    elif audit.status == "EXPIRED":
+        return {
+            "request_id": request_id,
+            "status": "EXPIRED",
+            "verdict": "SUSPICIOUS",
+            "resolved": True,
+        }
+    else:
+        pending = session.exec(select(PendingSpend).where(PendingSpend.request_id == request_id)).first()
+        return {
+            "request_id": request_id,
+            "status": "PENDING_HITL",
+            "verdict": "SUSPICIOUS",
+            "resolved": False,
+            "expires_at": pending.expires_at if pending else None,
+        }
 

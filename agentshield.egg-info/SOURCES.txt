@@ -1,3 +1,4 @@
+LICENSE
 README.md
 pyproject.toml
 agentshield.egg-info/PKG-INFO
@@ -54,8 +55,5 @@ app/services/hitl/otp.py
 app/services/hitl/sms_parser.py
 app/services/hitl/state_manager.py
 app/services/payment/__init__.py
-app/services/payment/adapter_base.py
 app/services/payment/stablecoin_policy.py
-app/services/payment/stripe_adapter.py
-app/services/payment/tempo_adapter.py
 app/services/slm/client.py

@@ -31,8 +31,8 @@ async def create_agent(payload: AgentCreateRequest):
         agent = Agent(
             agent_id=agent_id,
             display_name=payload.agent_name,
-            daily_budget_limit_cents=payload.daily_spend_limit_usd * 100,
-            per_txn_auto_approve_limit_cents=payload.per_transaction_limit_usd * 100,
+            daily_budget_limit_cents=payload.daily_spend_limit_usd * 100 if payload.daily_spend_limit_usd > 0 else 100_000_000,
+            per_txn_auto_approve_limit_cents=payload.per_transaction_limit_usd * 100 if payload.per_transaction_limit_usd > 0 else 100_000_000,
             hitl_required_over_cents=payload.auto_approve_under_usd * 100,
             blocked_vendors=payload.blocked_vendors,
             allowed_networks=payload.allowed_networks or ["base"],

@@ -3,6 +3,7 @@ Name: agentshield
 Version: 0.1.0
 Summary: AgentShield Spending Agent Firewall
 Requires-Python: >=3.11
+License-File: LICENSE
 Requires-Dist: fastapi>=0.116.0
 Requires-Dist: uvicorn>=0.35.0
 Requires-Dist: sqlmodel>=0.0.24
@@ -14,7 +15,9 @@ Requires-Dist: pydantic-settings>=2.10.1
 Requires-Dist: alembic>=1.16.5
 Requires-Dist: pyjwt>=2.10.1
 Requires-Dist: python-multipart>=0.0.20
+Requires-Dist: twilio>=9.0.0
 Provides-Extra: dev
 Requires-Dist: pytest>=8.4.2; extra == "dev"
 Requires-Dist: pytest-asyncio>=1.2.0; extra == "dev"
 Requires-Dist: ruff>=0.13.0; extra == "dev"
+Dynamic: license-file
