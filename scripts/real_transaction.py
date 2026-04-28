@@ -1,13 +1,19 @@
 import hashlib
 import hmac
 import json
+import os
+import sys
 import time
 import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
 
-AGENT_ID = "${AGENTSHIELD_AGENT_ID}"
-SECRET   = "${AGENTSHIELD_HMAC_SECRET}"
+AGENT_ID = os.environ.get("AGENTSHIELD_AGENT_ID")
+SECRET   = os.environ.get("AGENTSHIELD_HMAC_SECRET")
+
+if not AGENT_ID or not SECRET:
+    print("Error: set AGENTSHIELD_AGENT_ID and AGENTSHIELD_HMAC_SECRET env vars first.")
+    sys.exit(1)
 BASE     = "http://127.0.0.1:8000/v1"
 
 WEATHER_URL = "https://openweather.mpp.paywithlocus.com/openweather/current-weather"
