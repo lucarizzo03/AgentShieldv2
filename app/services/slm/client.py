@@ -1,8 +1,6 @@
 from typing import Any
-import json
-import re
 
-import httpx
+import anthropic
 
 from app.core.config import get_settings
 
@@ -21,67 +19,40 @@ Definitions:
 - MISMATCH (risk 70-100): goal contradicts what is being purchased, vendor is suspicious, or vendor domain looks fake/malicious
 
 Vendor domain red flags that always indicate MISMATCH with risk 85+:
-- Long random-looking subdomains (e.g. "imGonnaStealurInfo.mpp.xyz", "api.sketchy-random-subdomain.xyz")
-- Domains that embed a known brand but are clearly not the real site (e.g. "paypal-secure-login.net", "amazon.payments.ru")
-- Domains with unusual TLDs combined with financial keywords (e.g. "fastpay.mpp.io", "transfer.tempo.xyz/:rest*")
-- URLs containing path patterns that suggest API spoofing (e.g. "/airline/:rest*", "/:anything*")
+- Subdomains that are clearly random gibberish (e.g. "xK9mQpZr2.payments.io", "imGonnaStealurInfo.xyz")
+- Domains that embed a known brand but are clearly not the real site (e.g. "paypal-secure-login.net", "amazon-checkout.ru")
+- URLs containing path parameter patterns that suggest spoofing (e.g. "/airline/:rest*", "/:id*")
+
+Note: Legitimate pay-per-use API domains like "openweather.mpp.paywithlocus.com" or "agents.martinestate.com" are NOT suspicious — they are real vendor endpoints.
 
 Examples:
 
 Input: goal="Book flight JFK to LAX", amount_cents=25000, vendor="delta.com", item="Economy seat JFK-LAX"
 Output: {"alignment_label": "ALIGNED", "risk_score": 5, "reason_codes": ["GOAL_MATCHES_ITEM", "VENDOR_MATCHES_GOAL", "AMOUNT_REASONABLE"]}
 
-Input: goal="Buy office supplies", amount_cents=150000, vendor="crypto-exchange.io", item="Token purchase"
+Input: goal="Buy office supplies", amount_cents=80000, vendor="binance.com", item="Token purchase"
 Output: {"alignment_label": "MISMATCH", "risk_score": 95, "reason_codes": ["VENDOR_UNRELATED_TO_GOAL", "ITEM_UNRELATED_TO_GOAL", "CRYPTO_PURCHASE_UNEXPECTED"]}
 
-Input: goal="Purchase software tools", amount_cents=50000, vendor="notion.so", item="Notion Enterprise annual plan"
-Output: {"alignment_label": "ALIGNED", "risk_score": 20, "reason_codes": ["GOAL_MATCHES_ITEM", "VENDOR_PLAUSIBLE", "AMOUNT_REASONABLE"]}
+Input: goal="Book outdoor venue for company retreat", amount_cents=2, vendor="openweather.mpp.paywithlocus.com", item="Current weather API call"
+Output: {"alignment_label": "WEAK", "risk_score": 55, "reason_codes": ["GOAL_LOOSELY_RELATED_TO_VENDOR", "WEATHER_DATA_FOR_VENUE_BOOKING_PLAUSIBLE"]}
 
-Input: goal="Track a flight", amount_cents=75000, vendor="https://imGonnaStealurInfoFlightapi.mpp.tempo.xyz/airline/:rest*", item="Flight tracking service"
-Output: {"alignment_label": "MISMATCH", "risk_score": 97, "reason_codes": ["VENDOR_DOMAIN_SUSPICIOUS", "SUBDOMAIN_RANDOM_MALICIOUS", "URL_PATTERN_SPOOFED", "LIKELY_PHISHING_VENDOR"]}
+Input: goal="Get current weather forecast for NYC trip planning", amount_cents=2, vendor="openweather.mpp.paywithlocus.com", item="Current weather API call for NYC coordinates"
+Output: {"alignment_label": "ALIGNED", "risk_score": 5, "reason_codes": ["GOAL_MATCHES_ITEM", "VENDOR_MATCHES_GOAL", "AMOUNT_REASONABLE"]}
 
-Input: goal="generate an image from openai", amount_cents=7500, vendor="Flightapi.mpp.tempo.xyz/airline/:rest*", item="Track a flight"
-Output: {"alignment_label": "MISMATCH", "risk_score": 98, "reason_codes": ["GOAL_UNRELATED_TO_ITEM", "GOAL_UNRELATED_TO_VENDOR", "VENDOR_DOMAIN_SUSPICIOUS", "ITEM_CONTRADICTS_GOAL", "THREE_WAY_MISMATCH"]}
+Input: goal="Browse wine catalog for team dinner selection", amount_cents=1, vendor="agents.martinestate.com", item="Wine catalog browse"
+Output: {"alignment_label": "ALIGNED", "risk_score": 8, "reason_codes": ["GOAL_MATCHES_ITEM", "VENDOR_PLAUSIBLE", "AMOUNT_REASONABLE"]}
 
-Input: goal="Pay for API access", amount_cents=500000, vendor="unknown-site.xyz", item="Premium credits"
-Output: {"alignment_label": "WEAK", "risk_score": 55, "reason_codes": ["VENDOR_UNRECOGNIZED", "AMOUNT_HIGH_FOR_GOAL"]}
+Input: goal="Track a flight", amount_cents=200, vendor="imGonnaStealurInfoFlightapi.mpp.tempo.xyz/airline/:rest*", item="Flight tracking service"
+Output: {"alignment_label": "MISMATCH", "risk_score": 97, "reason_codes": ["VENDOR_DOMAIN_SUSPICIOUS", "URL_PATTERN_SPOOFED", "LIKELY_PHISHING_VENDOR"]}
 
 Now evaluate the following transaction and output ONLY the JSON object, no other text:"""
-
-
-def _extract_json(text: str) -> dict[str, Any] | None:
-    """Extract the first valid JSON object from model output."""
-    # Try direct parse first
-    text = text.strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    # Find JSON object in the output
-    match = re.search(r'\{[^{}]*"alignment_label"[^{}]*\}', text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    # Broader search for any JSON object
-    match = re.search(r'\{.*?\}', text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    return None
 
 
 class LocalSlmClient:
     def __init__(self) -> None:
         settings = get_settings()
-        self._base_url = settings.slm_base_url.rstrip("/")
         self._model = settings.slm_model_name
+        self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     async def semantic_alignment(
         self,
@@ -104,28 +75,29 @@ class LocalSlmClient:
         if network:
             user_input += f', network="{network}"'
 
-        payload = {
-            "model": self._model,
-            "system": _SYSTEM_PROMPT,
-            "prompt": user_input,
-            "stream": False,
-            "format": "json",
-        }
         try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(f"{self._base_url}/api/generate", json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            raw = data.get("response", "")
+            msg = await self._client.messages.create(
+                model=self._model,
+                max_tokens=256,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_input}],
+            )
+            import json, re, logging
+            raw = msg.content[0].text.strip()
 
-            if isinstance(raw, dict):
-                parsed = raw
-            else:
-                parsed = _extract_json(str(raw))
+            # strip markdown code fences if present
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
 
-            if parsed and "alignment_label" in parsed:
-                return parsed
+            # find first JSON object
+            match = re.search(r'\{.*\}', raw, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group())
+                if "alignment_label" in parsed:
+                    return parsed
 
-            return {"alignment_label": "WEAK", "risk_score": 55, "reason_codes": ["SLM_NONJSON_RESPONSE"]}
-        except Exception:
+            return {"alignment_label": "WEAK", "risk_score": 55, "reason_codes": ["SLM_UNEXPECTED_RESPONSE"]}
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("SLM call failed: %s", e)
             return {"alignment_label": "WEAK", "risk_score": 55, "reason_codes": ["SLM_UNAVAILABLE"]}

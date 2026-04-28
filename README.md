@@ -19,7 +19,7 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
 - Runs **Financial Triangulation**:
   - Quantitative checks (Redis)
   - Policy checks (Postgres-backed Agent policy)
-  - Semantic checks (local SLM over direct HTTP)
+  - Semantic checks (Claude Haiku via Anthropic API)
 - Produces one of 3 outcomes:
   - `SAFE` -> execute immediately (`200`)
   - `SUSPICIOUS` -> pause for Human-in-the-Loop (`202`)
@@ -66,8 +66,8 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
 - **Dashboard Queue**
   - Queue model: `app/models/dashboard_notification.py`
   - Queue APIs: `app/api/v1/routes/dashboard.py`
-- **SLM Client**
-  - `app/services/slm/client.py` (direct HTTP, no LangChain)
+- **Semantic Check Client**
+  - `app/services/slm/client.py` (Anthropic SDK, `claude-haiku-4-5-20251001`)
 - **Idempotency + Metrics**
   - `app/services/idempotency.py`
   - `app/core/metrics.py`
@@ -79,7 +79,7 @@ flowchart TD
     agent[SpendingAgent] --> firewall[AgentShieldAPI]
     firewall --> checkA[RedisCheckA]
     firewall --> checkB[PostgresCheckB]
-    firewall --> checkC[LocalSLMCheckC]
+    firewall --> checkC[ClaudeHaikuSemanticCheckC]
     checkA --> synth[VerdictSynthesis]
     checkB --> synth
     checkC --> synth
@@ -119,12 +119,14 @@ For each `POST /v1/spend-request`, AgentShield:
    - Destination burst detection
 5. Runs **Check B (Policy DB)**:
    - Vendor blocklist
+   - Rule-based phishing domain detection (path parameter patterns, random-looking subdomains)
    - Amount over auto-approval threshold
    - Stablecoin token/network/address policy
-6. Runs **Check C (SLM Semantic)**:
-   - Local model (`qwen2:0.5b` via Ollama) classifies goal/vendor/item alignment
+6. Runs **Check C (Semantic)**:
+   - `claude-haiku-4-5-20251001` via Anthropic API classifies goal/vendor/item alignment
    - Returns `ALIGNED`, `WEAK`, or `MISMATCH` label + reason codes
-   - Decision is label-driven only (numeric scores from small models are unreliable)
+   - Only `MISMATCH` triggers a `SUSPICIOUS` escalation; `WEAK` logs a reason and passes through
+   - Obvious phishing domains are hard-denied in Check B before Check C runs
 7. Synthesizes verdict:
    - `MALICIOUS` on hard deny conditions
    - `SUSPICIOUS` on soft risk conditions
@@ -302,15 +304,18 @@ Migration artifacts:
 
 ## Setup
 
-1. Copy env template:
+1. Copy env template and fill in secrets:
    - `cp .env.example .env`
-2. Install dependencies:
-   - `python3.11 -m pip install -e ".[dev]"`
-3. Start infra:
+   - Set `ANTHROPIC_API_KEY`, `SENDGRID_API_KEY`, `JWT_SECRET`, `AGENT_HMAC_SECRET`, `WEBHOOK_HMAC_SECRET`
+2. Install dependencies (uses `uv`):
+   - `uv sync`
+3. Start infra (Postgres + Redis):
    - `docker compose -f infra/docker-compose.yml up -d`
-4. Run API:
-   - `python3.11 -m uvicorn app.main:app --reload`
-5. Run dashboard:
+4. Run migrations:
+   - `uv run alembic upgrade head`
+5. Run API:
+   - `uv run uvicorn app.main:app --reload --port 8000`
+6. Run dashboard:
    - `cd dashboard && npm install && npm run dev`
    - Dashboard available at `http://localhost:5173`
 
@@ -318,12 +323,16 @@ Migration artifacts:
 
 Configure these values in `.env` for production:
 
+- `ANTHROPIC_API_KEY` — Claude Haiku semantic check
 - `JWT_ALGORITHM`
 - `JWT_SECRET`
 - `JWT_AUDIENCE`
 - `AGENT_HMAC_SECRET`
 - `WEBHOOK_HMAC_SECRET`
 - `SIGNATURE_TOLERANCE_SECONDS`
+- `SENDGRID_API_KEY` — email HITL notifications
+- `HITL_EMAIL_FROM` / `HITL_EMAIL_TO`
+- `API_PUBLIC_URL` — public base URL for email approve/deny links (ngrok tunnel in dev)
 - `SMS_PROVIDER` (`stub` or `twilio`)
 - `TWILIO_ACCOUNT_SID`
 - `TWILIO_AUTH_TOKEN`
@@ -340,7 +349,6 @@ Canonical HMAC message format used by the API:
 
 - Postgres on `localhost:5432`
 - Redis on `localhost:6379`
-- Ollama-compatible local SLM endpoint on `localhost:11434`
 
 ## Testing
 
@@ -372,36 +380,41 @@ Core files:
 Common commands:
 
 - Apply migrations:
-  - `python3.11 scripts/migrate.py upgrade head`
+  - `uv run python3 scripts/migrate.py upgrade head`
 - Show current revision:
-  - `python3.11 scripts/migrate.py current`
+  - `uv run python3 scripts/migrate.py current`
 - Create migration from model changes:
-  - `python3.11 scripts/migrate.py revision --autogenerate --message "your change"`
+  - `uv run python3 scripts/migrate.py revision --autogenerate --message "your change"`
 - Roll back one revision:
-  - `python3.11 scripts/migrate.py downgrade -1`
+  - `uv run python3 scripts/migrate.py downgrade -1`
 
 ## What Is Working
 
 - **Spend request pipeline** — full triangulation (Check A + B + C) on every request
 - **Verdicts** — SAFE (200), SUSPICIOUS (202), MALICIOUS (403) all firing correctly
+- **Check A — Quantitative** — daily budget, loop detection, destination burst (Redis)
+- **Check B — Policy** — vendor blocklist, rule-based phishing domain detection, token/network allowlist
+- **Check C — Semantic** — `claude-haiku-4-5-20251001` via Anthropic API; `MISMATCH` → SUSPICIOUS, `WEAK` → passes with reason logged
 - **HITL dashboard** — pending approvals queue, approve/deny in-app, audit log updates in place
-- **SLM semantic check** — running locally via Ollama (`qwen2:0.5b`, 3-5s response time)
-- **Dev SLM preset** — `dev_slm_preset: "ALIGNED" | "WEAK" | "MISMATCH"` in request body bypasses Ollama in `APP_ENV=dev` for instant test results
+- **HITL email** — SendGrid sends approve/deny links on SUSPICIOUS; links work from phone via ngrok tunnel
+- **Dev semantic preset** — `dev_slm_preset: "ALIGNED" | "WEAK" | "MISMATCH"` in request body bypasses Claude in `APP_ENV=dev`
 - **Quickstart buttons** — Run SAFE Test and Run HITL Test in the dashboard use dev preset, respond immediately
 - **Activity feed** — full audit log with Check A/B/C detail panel per transaction
 - **Overview chart** — request activity by time bucket (safe/pending/blocked lines)
 - **Stats cards** — today's totals for transactions, blocked, pending, approved (includes human-approved)
 - **Onboarding checklist** — tracks agent created, first transaction, first human decision, ready for live
-- **HMAC auth** — per-agent signed requests; dev bypass via `x-agent-key: local-dev-key`
+- **HMAC auth** — per-agent signed requests with per-agent secrets stored in dashboard localStorage
 - **Idempotency** — Redis-cached responses prevent duplicate payment execution
-- **Twilio SMS wiring** — `SMS_PROVIDER=twilio` in `.env` sends real texts via `notifier.py`; Twilio credentials and from-number are configured
+- **Buying agent** — `scripts/buying_agent.py` end-to-end test harness: 2 SAFE (real API calls), 2 SUSPICIOUS (HITL wait), 3 BLOCKED
+- **Tempo micropayments** — buying agent executes real USDC payments via `tempo request` after AgentShield approval (weather API, Martin Estate catalog)
 
 ## What Is Not Yet Working
 
-- **Twilio SMS delivery** — backend sends successfully (201 from Twilio) but trial account cannot verify recipient numbers, so texts are queued but not delivered. Requires Twilio account upgrade or toll-free verification approval.
-- **Inbound SMS resolution** — `POST /v1/hitl/sms/inbound` webhook is fully implemented but untested end-to-end without a working Twilio number and public webhook URL (ngrok or deployed)
-- **OTP phone verification via UI** — the OTP delivery is a stub (logs only); `000000` works as a dev bypass but no real SMS is sent for the verification code
-- **Payment execution** — AgentShield returns a verdict only; the calling agent is responsible for executing payment on approval. No payment adapter runs server-side.
+- **Twilio SMS delivery** — backend sends successfully (201 from Twilio) but trial account cannot verify recipient numbers. Requires account upgrade or toll-free verification approval.
+- **Inbound SMS resolution** — `POST /v1/hitl/sms/inbound` webhook implemented but untested end-to-end without a working Twilio number
+- **OTP phone verification via UI** — OTP delivery is a stub (logs only); `000000` works as a dev bypass
+- **Payment execution server-side** — AgentShield returns a verdict only; the calling agent executes payment after approval. No payment adapter runs server-side.
 - **Outbound HITL callbacks** — no webhook delivery back to the agent when a pending request is resolved
 - **Prometheus/OpenTelemetry export** — metrics are counted in-process only, not exported
 - **Dashboard pagination** — activity feed and notification queue have no cursor-based pagination
+- **ngrok stability** — free plan regenerates tunnel URL on every restart; `API_PUBLIC_URL` in `.env` must be updated manually and backend restarted
