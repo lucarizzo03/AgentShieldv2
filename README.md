@@ -405,16 +405,5 @@ Common commands:
 - **Onboarding checklist** — tracks agent created, first transaction, first human decision, ready for live
 - **HMAC auth** — per-agent signed requests with per-agent secrets stored in dashboard localStorage
 - **Idempotency** — Redis-cached responses prevent duplicate payment execution
-- **Buying agent** — `scripts/buying_agent.py` end-to-end test harness: 2 SAFE (real API calls), 2 SUSPICIOUS (HITL wait), 3 BLOCKED
-- **Tempo micropayments** — buying agent executes real USDC payments via `tempo request` after AgentShield approval (weather API, Martin Estate catalog)
 
-## What Is Not Yet Working
 
-- **Twilio SMS delivery** — backend sends successfully (201 from Twilio) but trial account cannot verify recipient numbers. Requires account upgrade or toll-free verification approval.
-- **Inbound SMS resolution** — `POST /v1/hitl/sms/inbound` webhook implemented but untested end-to-end without a working Twilio number
-- **OTP phone verification via UI** — OTP delivery is a stub (logs only); `000000` works as a dev bypass
-- **Payment execution server-side** — AgentShield returns a verdict only; the calling agent executes payment after approval. No payment adapter runs server-side.
-- **Outbound HITL callbacks** — no webhook delivery back to the agent when a pending request is resolved
-- **Prometheus/OpenTelemetry export** — metrics are counted in-process only, not exported
-- **Dashboard pagination** — activity feed and notification queue have no cursor-based pagination
-- **ngrok stability** — free plan regenerates tunnel URL on every restart; `API_PUBLIC_URL` in `.env` must be updated manually and backend restarted
