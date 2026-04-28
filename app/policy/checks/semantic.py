@@ -49,8 +49,7 @@ async def run_semantic_checks(
         check.suspicious = True
         check.reasons.append("SEMANTIC_MISMATCH_HIGH")
     elif alignment_label == "WEAK":
-        check.suspicious = True
-        check.reasons.append("SEMANTIC_MISMATCH_MEDIUM")
+        check.reasons.append("SEMANTIC_ALIGNMENT_WEAK")
     else:
         check.reasons.append("SEMANTIC_ALIGNMENT_HIGH")
 

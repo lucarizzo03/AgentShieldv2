@@ -1,3 +1,5 @@
+import re
+
 from app.models.agent import Agent
 from app.policy.verdicts import CheckResult
 from app.services.payment.stablecoin_policy import validate_stablecoin_policy
@@ -6,6 +8,20 @@ from app.services.payment.stablecoin_policy import validate_stablecoin_policy
 def _contains_vendor_match(blocked_vendors: list[str], vendor: str) -> bool:
     candidate = vendor.lower().strip()
     return any(entry.lower().strip() in candidate for entry in blocked_vendors)
+
+
+def _is_phishing_vendor(vendor: str) -> bool:
+    """Rule-based detection for obviously malicious vendor domains."""
+    # URL path parameter patterns like /:rest* or /:id
+    if re.search(r'/:[a-zA-Z]', vendor):
+        return True
+    # Subdomains longer than 30 chars are almost always randomly generated
+    match = re.match(r'https?://([^/]+)', vendor)
+    hostname = match.group(1) if match else vendor.split('/')[0]
+    subdomain = hostname.split('.')[0]
+    if len(subdomain) > 30:
+        return True
+    return False
 
 
 def run_policy_checks(
@@ -23,6 +39,9 @@ def run_policy_checks(
     if vendor_blocked:
         check.hard_deny = True
         check.reasons.append("VENDOR_MATCHED_BLOCKLIST")
+    elif _is_phishing_vendor(vendor_url_or_name):
+        check.hard_deny = True
+        check.reasons.append("VENDOR_DOMAIN_PHISHING_PATTERN")
     else:
         check.reasons.append("VENDOR_ALLOWED")
 
