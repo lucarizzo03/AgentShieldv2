@@ -24,15 +24,6 @@ from app.services.slm.client import LocalSlmClient
 router = APIRouter(tags=["spend"])
 
 
-def _is_high_risk_suspicious(reasons: list[str]) -> bool:
-    high_risk_flags = {
-        "SEMANTIC_MISMATCH_MEDIUM",
-        "LOOP_PATTERN_DETECTED",
-        "DESTINATION_BURST_DETECTED",
-        "BUDGET_DAILY_LIMIT_EXCEEDED",
-    }
-    return any(reason in high_risk_flags for reason in reasons)
-
 
 @router.post("/spend-request")
 async def spend_request(

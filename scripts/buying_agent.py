@@ -258,7 +258,7 @@ purchase(
         "asset_type": "STABLECOIN",
         "stablecoin_symbol": "USDC",
         "network": "base",
-        "destination_address": "",
+        "destination_address": "0x5cCAE168FcdeA51Db09E591dcc8e23065b9d8041",
         "vendor_url_or_name": "openweather.mpp.paywithlocus.com",
         "item_description": "Current weather API call for NYC coordinates",
         "idempotency_key": f"ba-safe-weather-{int(time.time())}",

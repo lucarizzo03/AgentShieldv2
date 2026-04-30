@@ -64,7 +64,6 @@ async def list_agents():
                     "agent_id": a.agent_id,
                     "display_name": a.display_name,
                     "status": a.status,
-                    "hitl_primary_channel": a.hitl_primary_channel,
                 }
                 for a in agents
             ]

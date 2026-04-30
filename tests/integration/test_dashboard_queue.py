@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, select
 
@@ -26,10 +24,6 @@ def _seed_agent() -> None:
                 daily_budget_limit_cents=100_000,
                 per_txn_auto_approve_limit_cents=1000,
                 currency="USD",
-                hitl_phone_number="+15550001111",
-                hitl_phone_verified_at=datetime.now(timezone.utc),
-                hitl_primary_channel="dashboard",
-                hitl_sms_fallback_high_risk=True,
             )
         )
         session.commit()
