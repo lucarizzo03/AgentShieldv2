@@ -13,8 +13,6 @@ Three comprehensive scenario tests covering every decision path in AgentShield.
     • APPROVE via dashboard executes payment + transitions all records
     • DENY via dashboard holds funds + records DENIED_BY_HUMAN audit
     • Double-resolve attempt returns 409
-    • SMS resolution (verified phone, high-risk flag)
-    • SMS from wrong phone returns 403
 
   Test 3 — MALICIOUS / hard-deny path
     • Vendor on blocklist → VENDOR_MATCHED_BLOCKLIST
@@ -28,7 +26,7 @@ Three comprehensive scenario tests covering every decision path in AgentShield.
 from collections import defaultdict
 from datetime import datetime, timezone
 
-import pytest
+import pytest  # noqa: F401
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, select
 
@@ -97,10 +95,6 @@ def _seed_agent(**overrides) -> None:
         allowed_networks=["base", "ethereum"],
         allowed_destination_addresses=[],
         blocked_destination_addresses=["0xdeadbeefdeadbeef0000000000000000deadbeef"],
-        hitl_phone_number="+15555550100",
-        hitl_phone_verified_at=None,
-        hitl_primary_channel="dashboard",
-        hitl_sms_fallback_high_risk=True,
     )
     defaults.update(overrides)
     with Session(engine) as session:
@@ -306,8 +300,6 @@ class TestSuspiciousHitlPath:
             ).first()
             assert pending is not None
             assert pending.state == "WAITING_HUMAN"
-            assert pending.hitl_channel == "dashboard"
-            assert pending.hitl_contact is None
 
             # DashboardNotification created and open
             notif = session.exec(
@@ -411,76 +403,6 @@ class TestSuspiciousHitlPath:
 
         assert r1.status_code == 200
         assert r2.status_code == 409, "Already-resolved request must return 409"
-
-    def test_sms_resolution_with_verified_phone(self):
-        """When phone is verified and high-risk flag is set, suspicious spend routes to SMS.
-        Inbound SMS from the correct number resolves it."""
-        _reset_db()
-        _seed_agent(
-            hitl_phone_number="+15555550100",
-            hitl_phone_verified_at=datetime.now(timezone.utc),
-            hitl_sms_fallback_high_risk=True,
-            hitl_required_over_cents=1_000,
-        )
-        _mock_slm("WEAK", 60)
-
-        with TestClient(app) as client:
-            spend = client.post(
-                "/v1/spend-request",
-                headers=DEV_HEADERS,
-                json={**_STABLECOIN, "amount_cents": 8_000, "idempotency_key": "sms-approve-001"},
-            )
-            assert spend.status_code == 202
-            body = spend.json()
-            assert body["hitl"]["channel"] == "sms", "Expected SMS channel for high-risk + verified phone"
-            request_id = body["request_id"]
-
-            sms = client.post(
-                "/v1/hitl/sms/inbound",
-                headers=WEBHOOK_HEADERS,
-                data={"From": "+15555550100", "Body": f"APPROVE {request_id}", "MessageSid": "SM001"},
-            )
-
-        assert sms.status_code == 200
-        assert "APPROVE recorded" in sms.text
-
-        with Session(engine) as session:
-            pending = session.exec(
-                select(PendingSpend).where(PendingSpend.request_id == request_id)
-            ).first()
-            assert pending.state == "APPROVED"
-
-    def test_sms_from_wrong_phone_is_rejected(self):
-        """Inbound SMS from an unrecognized number must return 403 and not resolve."""
-        _reset_db()
-        _seed_agent(
-            hitl_phone_number="+15555550100",
-            hitl_phone_verified_at=datetime.now(timezone.utc),
-            hitl_required_over_cents=1_000,
-        )
-        _mock_slm("WEAK", 60)
-
-        with TestClient(app) as client:
-            spend = client.post(
-                "/v1/spend-request",
-                headers=DEV_HEADERS,
-                json={**_STABLECOIN, "amount_cents": 8_000, "idempotency_key": "sms-badphone-001"},
-            )
-            request_id = spend.json()["request_id"]
-
-            sms = client.post(
-                "/v1/hitl/sms/inbound",
-                headers=WEBHOOK_HEADERS,
-                data={"From": "+19998887777", "Body": f"APPROVE {request_id}", "MessageSid": "SM002"},
-            )
-
-        assert sms.status_code == 403
-
-        with Session(engine) as session:
-            pending = session.exec(
-                select(PendingSpend).where(PendingSpend.request_id == request_id)
-            ).first()
-            assert pending.state == "WAITING_HUMAN", "State must not change on unauthorized SMS"
 
     def test_unverified_phone_always_routes_to_dashboard(self):
         """Phone number set but not verified → dashboard channel, no SMS, even for high-risk."""

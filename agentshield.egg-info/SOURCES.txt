@@ -12,14 +12,12 @@ app/api/__init__.py
 app/api/v1/__init__.py
 app/api/v1/routes/__init__.py
 app/api/v1/routes/agents.py
-app/api/v1/routes/contact.py
 app/api/v1/routes/dashboard.py
 app/api/v1/routes/hitl.py
 app/api/v1/routes/onboarding.py
 app/api/v1/routes/spend.py
 app/api/v1/schemas/__init__.py
 app/api/v1/schemas/agent.py
-app/api/v1/schemas/contact.py
 app/api/v1/schemas/dashboard.py
 app/api/v1/schemas/hitl.py
 app/api/v1/schemas/onboarding.py
@@ -51,8 +49,6 @@ app/services/__init__.py
 app/services/idempotency.py
 app/services/hitl/__init__.py
 app/services/hitl/notifier.py
-app/services/hitl/otp.py
-app/services/hitl/sms_parser.py
 app/services/hitl/state_manager.py
 app/services/payment/__init__.py
 app/services/payment/stablecoin_policy.py

@@ -5,7 +5,6 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.routes.agents import router as agents_router
-from app.api.v1.routes.contact import router as contact_router
 from app.api.v1.routes.dashboard import router as dashboard_router
 from app.api.v1.routes.hitl import router as hitl_router
 from app.api.v1.routes.onboarding import router as onboarding_router
@@ -41,7 +40,6 @@ def create_app() -> FastAPI:
 
     app.include_router(spend_router, prefix="/v1")
     app.include_router(hitl_router, prefix="/v1")
-    app.include_router(contact_router, prefix="/v1")
     app.include_router(agents_router, prefix="/v1")
     app.include_router(dashboard_router, prefix="/v1")
     app.include_router(onboarding_router, prefix="/v1")

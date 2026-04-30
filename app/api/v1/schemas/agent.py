@@ -34,7 +34,6 @@ class AgentSummary(BaseModel):
     agent_id: str
     display_name: str
     status: str
-    hitl_primary_channel: str
 
 
 class AgentListResponse(BaseModel):

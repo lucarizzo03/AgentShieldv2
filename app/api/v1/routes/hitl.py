@@ -22,7 +22,6 @@ from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
 from app.policy.checks.quantitative import commit_budget_spend
-from app.services.hitl.sms_parser import parse_sms_decision
 from app.services.hitl.state_manager import apply_resolution, ensure_pending_is_resolvable
 
 
@@ -200,64 +199,6 @@ async def resolve_hitl_request(
 ):
     return await _resolve_pending(request_id=request_id, payload=payload, session=session, redis=redis)
 
-
-@router.post("/hitl/sms/inbound")
-async def inbound_hitl_sms(
-    request: Request,
-    _: None = Depends(verify_hitl_webhook_signature),
-    session: Session = Depends(get_session),
-    redis: Redis = Depends(get_redis),
-):
-    form = await request.form()
-    body = str(form.get("Body", "")).strip()
-    from_phone = str(form.get("From", "")).strip()
-    message_sid = str(form.get("MessageSid", "")).strip() or None
-
-    parsed = parse_sms_decision(body)
-    if not parsed:
-        return Response(
-            content=(
-                "<Response><Message>"
-                "Invalid command. Reply with APPROVE &lt;request_id&gt; or DENY &lt;request_id&gt;."
-                "</Message></Response>"
-            ),
-            media_type="application/xml",
-        )
-
-    decision, request_id = parsed
-    pending = session.exec(select(PendingSpend).where(PendingSpend.request_id == request_id)).first()
-    if not pending:
-        return Response(
-            content="<Response><Message>Request ID not found.</Message></Response>",
-            media_type="application/xml",
-        )
-
-    if (pending.hitl_contact or "").strip() != from_phone:
-        return Response(
-            content="<Response><Message>Phone number not authorized for this request.</Message></Response>",
-            media_type="application/xml",
-            status_code=status.HTTP_403_FORBIDDEN,
-        )
-
-    payload = HitlResolveRequest(
-        decision=decision,
-        resolver_id=f"sms:{from_phone}",
-        channel="sms",
-        provider_message_id=message_sid,
-    )
-    try:
-        await _resolve_pending(request_id=request_id, payload=payload, session=session, redis=redis)
-    except HTTPException as exc:
-        return Response(
-            content=f"<Response><Message>Unable to resolve request: {exc.detail}</Message></Response>",
-            media_type="application/xml",
-            status_code=exc.status_code,
-        )
-
-    return Response(
-        content=f"<Response><Message>{decision} recorded for {request_id}.</Message></Response>",
-        media_type="application/xml",
-    )
 
 
 @router.get("/hitl/email-resolve/{request_id}", response_class=HTMLResponse)
