@@ -15,7 +15,6 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
 ## What This Service Does
 
 - Receives spend intents through `POST /v1/spend-request`
-- Supports user-entered phone verification via OTP before SMS fallback is enabled
 - Runs **Financial Triangulation**:
   - Quantitative checks (Redis)
   - Policy checks (Postgres-backed Agent policy)
@@ -24,8 +23,7 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
   - `SAFE` -> execute immediately (`200`)
   - `SUSPICIOUS` -> pause for Human-in-the-Loop (`202`)
   - `MALICIOUS` -> block (`403`)
-- Resolves paused requests via `POST /v1/hitl/resolve/{request_id}`
-- Accepts inbound SMS decisions via `POST /v1/hitl/sms/inbound`
+- Resolves paused requests via `POST /v1/hitl/resolve/{request_id}` (email approve/deny links + dashboard)
 - Exposes dashboard queue APIs for pending HITL review
 - Persists append-only audit records for every decision/execution step
 
@@ -42,7 +40,6 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
 - **FastAPI API Layer**
   - `app/main.py`
   - `app/api/v1/routes/agents.py`
-  - `app/api/v1/routes/contact.py`
   - `app/api/v1/routes/spend.py`
   - `app/api/v1/routes/hitl.py`
   - `app/api/v1/routes/dashboard.py`
@@ -59,9 +56,7 @@ Primary scope in this codebase is **stablecoin spending** (`USDC`/`USDT`) with o
 - **Stablecoin Policy**
   - `app/services/payment/stablecoin_policy.py` — validates token/network/address against agent policy
 - **HITL Services**
-  - Provider-agnostic stub notification service: `app/services/hitl/notifier.py`
-  - Inbound text parser: `app/services/hitl/sms_parser.py`
-  - OTP generation/verification service: `app/services/hitl/otp.py`
+  - Email + dashboard notification service: `app/services/hitl/notifier.py`
   - State transitions: `app/services/hitl/state_manager.py`
 - **Dashboard Queue**
   - Queue model: `app/models/dashboard_notification.py`
@@ -87,9 +82,9 @@ flowchart TD
     pay --> ok200[Return200ApprovedExecuted]
     synth -->|MALICIOUS| deny403[Return403Blocked]
     synth -->|SUSPICIOUS| pending[CreatePendingSpend]
-    pending --> sms[SendHitlSms]
-    sms --> resp202[Return202AgentMustWait]
-    human[HumanApprover] -->|SMSorDashboardDecision| resolve[HitlResolveEndpoint]
+    pending --> email[SendHitlEmail+Dashboard]
+    email --> resp202[Return202AgentMustWait]
+    human[HumanApprover] -->|EmailLinkOrDashboard| resolve[HitlResolveEndpoint]
     resolve -->|APPROVE| pay2[PaymentAdapter]
     resolve -->|DENY| denyHuman[MarkDeniedByHuman]
 ```
@@ -100,11 +95,7 @@ flowchart TD
 - `SUSPICIOUS`: soft-risk conditions -> pause and require HITL (`202`)
 - `MALICIOUS`: hard-deny condition -> block with no payment execution (`403`)
 
-HITL policy defaults in code:
-
-- Primary channel is `dashboard`
-- SMS is fallback-only for high-risk suspicious events
-- SMS fallback is used only when phone is verified
+HITL notification currently uses **email + dashboard**. SMS support is coming soon.
 
 ## Financial Triangulation Flow
 
@@ -134,7 +125,7 @@ For each `POST /v1/spend-request`, AgentShield:
 8. Branches outcome:
    - `SAFE`: execute payment + commit budget + audit log
    - `MALICIOUS`: block + audit log
-   - `SUSPICIOUS`: create pending spend + send HITL text + return wait response
+   - `SUSPICIOUS`: create pending spend + send HITL email + dashboard notification + return wait response
 
 ## Human-in-the-Loop (HITL) Guarantee
 
@@ -147,20 +138,7 @@ If a request is suspicious:
 - only `APPROVE` triggers payment execution
 - `DENY` (or expiration) ends request without payment
 
-This enforces the requirement that the agent must wait for human text approval before purchase is allowed.
-
-### Phone Verification Flow (OTP)
-
-To support UI-driven phone onboarding:
-
-1. `POST /v1/agents/{agent_id}/contact/phone/start`
-   - Body: `phone_number` (E.164)
-   - Generates OTP and sends through configured provider path (stub logger in current build)
-2. `POST /v1/agents/{agent_id}/contact/phone/verify`
-   - Body: `phone_number`, `code`
-   - Stores verified phone on agent profile
-3. `PATCH /v1/agents/{agent_id}/preferences/hitl`
-   - Controls primary channel and high-risk SMS fallback toggle
+This enforces the requirement that the agent must wait for human approval before purchase is allowed.
 
 ## API Contracts
 
@@ -169,12 +147,9 @@ To support UI-driven phone onboarding:
 - `POST /v1/agents` — register a new agent
 - `GET /v1/agents` — list all agents
 - `POST /v1/agents/{agent_id}/credentials/hmac/rotate` — rotate HMAC secret
-- `POST /v1/agents/{agent_id}/contact/phone/start` — start OTP phone verification
-- `POST /v1/agents/{agent_id}/contact/phone/verify` — confirm OTP
-- `PATCH /v1/agents/{agent_id}/preferences/hitl` — update HITL channel preferences
 - `POST /v1/spend-request` — submit a spend intent for evaluation
 - `POST /v1/hitl/resolve/{request_id}` — approve or deny a pending spend (dashboard/webhook)
-- `POST /v1/hitl/sms/inbound` — inbound SMS webhook (Twilio)
+- `GET /v1/hitl/email-resolve/{request_id}` — one-click approve/deny from email link
 - `GET /v1/dashboard/agents/{agent_id}/notifications?status=OPEN` — HITL queue
 - `PATCH /v1/dashboard/agents/{agent_id}/notifications/{notification_id}` — ACK or DISMISS
 - `GET /v1/dashboard/agents/{agent_id}/activity` — full audit log with check results
@@ -214,23 +189,22 @@ Request:
 
 - `decision` (`APPROVE` or `DENY`)
 - `resolver_id`
-- `channel` (`dashboard` or `sms`)
+- `channel` (`dashboard` or `email`)
 - optional metadata (`resolution_note`, `provider_message_id`)
 
 Response includes resolution status and whether payment was executed.
 
 Schema source: `app/api/v1/schemas/hitl.py`
 
-### 3) `POST /v1/hitl/sms/inbound`
+### 3) `GET /v1/hitl/email-resolve/{request_id}`
 
-Inbound webhook for SMS providers (provider-agnostic parser endpoint).
+One-click approve/deny from the email notification link.
 
-- Expected message format:
-  - `APPROVE <request_id>`
-  - `DENY <request_id>`
-- Validates sender phone against `PendingSpend.hitl_contact`
-- On valid decision, resolves the same pending request path as dashboard/webhook resolution
-- Responds with XML confirmation/error text
+- Query params: `decision` (`APPROVE` or `DENY`), `token` (HMAC-signed for link authenticity)
+- Returns a confirmation HTML page
+- Resolves the same pending request path as the dashboard webhook
+
+> **SMS support is coming soon.** Inbound SMS resolution will be added as an additional HITL channel.
 
 ### 4) Dashboard Queue Endpoints
 
@@ -240,24 +214,12 @@ Inbound webhook for SMS providers (provider-agnostic parser endpoint).
   - Body action: `ACK` or `DISMISS`
   - Marks notification for operator workflow state
 
-### 5) Contact and HITL Preference Endpoints
-
-- `POST /v1/agents/{agent_id}/contact/phone/start`
-  - Starts OTP verification for a user-entered phone number
-  - Requires authenticated agent scope match
-- `POST /v1/agents/{agent_id}/contact/phone/verify`
-  - Verifies OTP and stores `hitl_phone_number` + `hitl_phone_verified_at`
-- `PATCH /v1/agents/{agent_id}/preferences/hitl`
-  - Updates:
-    - `hitl_primary_channel` (currently `dashboard`)
-    - `hitl_sms_fallback_high_risk` (bool)
-
 ## Data Models
 
 ### Postgres Tables (SQLModel)
 
 - `Agent` (`app/models/agent.py`)
-  - Budget thresholds, blocked vendors, stablecoin policies, HITL contact
+  - Budget thresholds, blocked vendors, stablecoin policies
 - `SpendAuditLog` (`app/models/spend_audit_log.py`)
   - Ledger of checks/verdicts/execution metadata; HITL resolution updates the existing row in place (approve/deny transitions status rather than inserting a new row)
 - `PendingSpend` (`app/models/pending_spend.py`)
@@ -333,10 +295,6 @@ Configure these values in `.env` for production:
 - `SENDGRID_API_KEY` — email HITL notifications
 - `HITL_EMAIL_FROM` / `HITL_EMAIL_TO`
 - `API_PUBLIC_URL` — public base URL for email approve/deny links (ngrok tunnel in dev)
-- `SMS_PROVIDER` (`stub` or `twilio`)
-- `TWILIO_ACCOUNT_SID`
-- `TWILIO_AUTH_TOKEN`
-- `TWILIO_FROM_NUMBER`
 
 Canonical HMAC message format used by the API:
 
@@ -359,9 +317,7 @@ Run all tests:
 Current suite:
 
 - Unit tests: policy checks
-- Unit tests: SMS inbound parser
-- Integration tests: SAFE / SUSPICIOUS->APPROVE / MALICIOUS flows
-- Integration tests: OTP phone verification and HITL preference updates
+- Integration tests: SAFE / SUSPICIOUS→APPROVE / MALICIOUS flows
 - Integration tests: dashboard queue list/ack behavior
 - E2E contract-shape tests for schemas
 
