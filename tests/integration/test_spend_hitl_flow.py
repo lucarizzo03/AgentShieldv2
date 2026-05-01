@@ -43,6 +43,38 @@ class FakeRedis:
         self._counter.pop(key, None)
         return True
 
+    def pipeline(self) -> "FakePipeline":
+        return FakePipeline(self)
+
+
+class FakePipeline:
+    def __init__(self, redis: "FakeRedis") -> None:
+        self._redis = redis
+        self._cmds: list = []
+
+    async def __aenter__(self) -> "FakePipeline":
+        return self
+
+    async def __aexit__(self, *_) -> None:
+        pass
+
+    def incrby(self, key: str, amount: int) -> "FakePipeline":
+        self._cmds.append(("incrby", key, amount))
+        return self
+
+    def expire(self, key: str, ttl: int) -> "FakePipeline":
+        self._cmds.append(("expire", key, ttl))
+        return self
+
+    async def execute(self) -> list:
+        results = []
+        for cmd in self._cmds:
+            if cmd[0] == "incrby":
+                results.append(await self._redis.incrby(cmd[1], cmd[2]))
+            elif cmd[0] == "expire":
+                results.append(await self._redis.expire(cmd[1], cmd[2]))
+        return results
+
 
 def _reset_db() -> None:
     SQLModel.metadata.drop_all(engine)
@@ -61,6 +93,7 @@ def _seed_agent(**kwargs) -> None:
         "allowed_networks": ["base", "ethereum"],
         "allowed_destination_addresses": [],
         "blocked_destination_addresses": [],
+        "hmac_secret": "local-dev-key",
     }
     defaults.update(kwargs)
     with Session(engine) as session:
@@ -85,7 +118,7 @@ def test_safe_spend_request_approved() -> None:
     with TestClient(app) as client:
         resp = client.post(
             "/v1/spend-request",
-            headers={"x-agent-key": "local-dev-key"},
+            headers={"x-agent-key": "local-dev-key", "x-agent-id": "agent_demo"},
             json={
                 "agent_id": "agent_demo",
                 "declared_goal": "Pay hosting provider",
@@ -114,7 +147,7 @@ def test_suspicious_spend_goes_to_hitl_and_approves() -> None:
     with TestClient(app) as client:
         spend_resp = client.post(
             "/v1/spend-request",
-            headers={"x-agent-key": "local-dev-key"},
+            headers={"x-agent-key": "local-dev-key", "x-agent-id": "agent_demo"},
             json={
                 "agent_id": "agent_demo",
                 "declared_goal": "Buy API credits for website launch",
@@ -168,7 +201,7 @@ def test_malicious_spend_blocked() -> None:
     with TestClient(app) as client:
         resp = client.post(
             "/v1/spend-request",
-            headers={"x-agent-key": "local-dev-key"},
+            headers={"x-agent-key": "local-dev-key", "x-agent-id": "agent_demo"},
             json={
                 "agent_id": "agent_demo",
                 "declared_goal": "Purchase security tooling",

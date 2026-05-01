@@ -25,5 +25,5 @@ def test_hitl_resolve_contract_fields() -> None:
     payload = HitlResolveRequest(decision="APPROVE", resolver_id="human_1", channel="dashboard")
     data = payload.model_dump()
     assert data["decision"] == "APPROVE"
-    assert data["channel"] == "sms"
+    assert data["channel"] == "dashboard"
 

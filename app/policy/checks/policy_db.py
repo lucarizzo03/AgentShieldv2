@@ -45,7 +45,11 @@ def run_policy_checks(
     else:
         check.reasons.append("VENDOR_ALLOWED")
 
-    threshold = agent.hitl_required_over_cents or agent.per_txn_auto_approve_limit_cents
+    threshold = (
+        agent.per_txn_auto_approve_limit_cents
+        if agent.hitl_required_over_cents is None
+        else agent.hitl_required_over_cents
+    )
     amount_over_threshold = amount_cents > threshold
     if amount_over_threshold:
         check.suspicious = True

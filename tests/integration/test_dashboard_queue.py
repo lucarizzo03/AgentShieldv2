@@ -24,6 +24,7 @@ def _seed_agent() -> None:
                 daily_budget_limit_cents=100_000,
                 per_txn_auto_approve_limit_cents=1000,
                 currency="USD",
+                hmac_secret="local-dev-key",
             )
         )
         session.commit()

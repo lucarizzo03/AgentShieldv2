@@ -12,6 +12,8 @@ class PendingSpend(SQLModel, table=True):
     payload_json: dict = Field(default_factory=dict, sa_column=Column(JSON))
     verdict_snapshot: dict = Field(default_factory=dict, sa_column=Column(JSON))
     state: str = Field(default="WAITING_HUMAN", max_length=32)
+    hitl_channel: str = Field(default="email+dashboard", max_length=32)
+    hitl_contact: str | None = Field(default=None, max_length=256)
     expires_at: datetime = Field(index=True)
     resolved_at: datetime | None = None
     resolver_id: str | None = Field(default=None, max_length=128)
