@@ -19,7 +19,7 @@ router = APIRouter(tags=["agents"])
 
 
 @router.post("/agents", response_model=AgentCreateResponse)
-async def create_agent(payload: AgentCreateRequest):
+async def create_agent(payload: AgentCreateRequest, _auth: AuthContext = Depends(verify_agent_auth)):
     with Session(engine) as session:
         existing = session.exec(select(Agent).where(Agent.display_name == payload.agent_name)).first()
         if existing:
@@ -55,7 +55,7 @@ async def create_agent(payload: AgentCreateRequest):
 
 
 @router.get("/agents", response_model=AgentListResponse)
-async def list_agents():
+async def list_agents(_auth: AuthContext = Depends(verify_agent_auth)):
     with Session(engine) as session:
         agents = session.exec(select(Agent).order_by(Agent.created_at.desc())).all()
         return {
@@ -72,6 +72,8 @@ async def list_agents():
 
 @router.post("/agents/{agent_id}/credentials/hmac/rotate", response_model=AgentRotateHmacResponse)
 async def rotate_agent_hmac(agent_id: str, auth: AuthContext = Depends(verify_agent_auth)):
+    if auth.agent_id != agent_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot rotate another agent's credentials")
     with Session(engine) as session:
         agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
         if not agent:
