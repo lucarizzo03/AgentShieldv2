@@ -33,6 +33,7 @@ app/db/redis.py
 app/migrations/env.py
 app/migrations/versions/20260418_0001_initial_schema.py
 app/migrations/versions/20260420_0002_agent_hmac_secret.py
+app/migrations/versions/20260430_0003_pending_spend_hitl_fields.py
 app/models/__init__.py
 app/models/agent.py
 app/models/dashboard_notification.py

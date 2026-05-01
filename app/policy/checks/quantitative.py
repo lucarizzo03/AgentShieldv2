@@ -62,23 +62,26 @@ async def run_quantitative_checks(
     else:
         check.reasons.append("BUDGET_WITHIN_LIMIT")
 
-    loop_count = await redis.incr(loop_key)
-    if loop_count == 1:
-        await redis.expire(loop_key, settings.loop_window_seconds)
-    if loop_count >= settings.loop_threshold:
-        check.suspicious = True
-        check.reasons.append("LOOP_PATTERN_DETECTED")
-    else:
-        check.reasons.append("NO_LOOP_PATTERN")
-
+    loop_count = 0
     destination_burst = 0
-    if burst_key:
-        destination_burst = await redis.incr(burst_key)
-        if destination_burst == 1:
-            await redis.expire(burst_key, settings.loop_window_seconds)
-        if destination_burst >= settings.loop_threshold:
+
+    if not budget_exceeded:
+        loop_count = await redis.incr(loop_key)
+        if loop_count == 1:
+            await redis.expire(loop_key, settings.loop_window_seconds)
+        if loop_count >= settings.loop_threshold:
             check.suspicious = True
-            check.reasons.append("DESTINATION_BURST_DETECTED")
+            check.reasons.append("LOOP_PATTERN_DETECTED")
+        else:
+            check.reasons.append("NO_LOOP_PATTERN")
+
+        if burst_key:
+            destination_burst = await redis.incr(burst_key)
+            if destination_burst == 1:
+                await redis.expire(burst_key, settings.loop_window_seconds)
+            if destination_burst >= settings.loop_threshold:
+                check.suspicious = True
+                check.reasons.append("DESTINATION_BURST_DETECTED")
 
     check.context = {
         "daily_spent_usd": round(current_spent / 100, 2),
@@ -93,6 +96,8 @@ async def run_quantitative_checks(
 async def commit_budget_spend(redis: Redis, agent_id: str, asset_type: str, amount_cents: int) -> None:
     date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     budget_key = f"budget:daily:{agent_id}:{asset_type}:{date_key}"
-    await redis.incrby(budget_key, amount_cents)
-    await redis.expire(budget_key, seconds_until_next_utc_midnight())
+    async with redis.pipeline() as pipe:
+        pipe.incrby(budget_key, amount_cents)
+        pipe.expire(budget_key, seconds_until_next_utc_midnight())
+        await pipe.execute()
 

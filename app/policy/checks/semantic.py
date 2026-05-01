@@ -31,22 +31,23 @@ async def run_semantic_checks(
         )
 
     raw_label = result.get("alignment_label")
+    raw_score = int(result.get("risk_score") or 0)
     alignment_label = str(raw_label).upper() if raw_label is not None else "WEAK"
     reason_codes = list(result.get("reason_codes", []))
 
-    # Tinyllama numeric scores are unreliable — use only the label for decisions.
-    # Clamp the stored score to a fixed range per label so the UI display is consistent.
-    if alignment_label == "ALIGNED":
-        risk_score = 10
-    elif alignment_label == "WEAK":
-        risk_score = 55
-    else:
-        risk_score = 85
+    # Raw score >= 85 is treated as MISMATCH regardless of label.
+    # Pin stored score to a consistent display range per label.
+    if raw_score >= 85 or alignment_label not in ("ALIGNED", "WEAK"):
         alignment_label = "MISMATCH"
+        risk_score = 85
+    elif alignment_label == "ALIGNED":
+        risk_score = 10
+    else:
+        risk_score = 55
 
     check = CheckResult()
     if alignment_label == "MISMATCH":
-        check.suspicious = True
+        check.hard_deny = True
         check.reasons.append("SEMANTIC_MISMATCH_HIGH")
     elif alignment_label == "WEAK":
         check.reasons.append("SEMANTIC_ALIGNMENT_WEAK")

@@ -23,6 +23,16 @@ from app.services.slm.client import LocalSlmClient
 
 router = APIRouter(tags=["spend"])
 
+_HIGH_RISK_REASONS = {
+    "BUDGET_DAILY_LIMIT_EXCEEDED",
+    "DESTINATION_BURST_DETECTED",
+    "VENDOR_DOMAIN_PHISHING_PATTERN",
+    "SEMANTIC_MISMATCH_HIGH",
+}
+
+
+def _is_high_risk_suspicious(reasons: list[str]) -> bool:
+    return bool(_HIGH_RISK_REASONS & set(reasons))
 
 
 @router.post("/spend-request")
@@ -274,11 +284,18 @@ async def get_spend_request_status(
         }
     else:
         pending = session.exec(select(PendingSpend).where(PendingSpend.request_id == request_id)).first()
+        if not pending:
+            return {
+                "request_id": request_id,
+                "status": "EXPIRED",
+                "verdict": "SUSPICIOUS",
+                "resolved": True,
+            }
         return {
             "request_id": request_id,
             "status": "PENDING_HITL",
             "verdict": "SUSPICIOUS",
             "resolved": False,
-            "expires_at": pending.expires_at if pending else None,
+            "expires_at": pending.expires_at,
         }
 

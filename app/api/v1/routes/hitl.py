@@ -90,12 +90,6 @@ async def _resolve_pending(
     if payload.decision == "APPROVE":
         increment("hitl.decision.approve")
         original = SpendRequest.model_validate(pending.payload_json)
-        await commit_budget_spend(
-            redis=redis,
-            agent_id=original.agent_id,
-            asset_type=original.asset_type,
-            amount_cents=original.amount_cents,
-        )
         audit = session.exec(
             select(SpendAuditLog).where(SpendAuditLog.request_id == request_id)
         ).first()
@@ -164,6 +158,14 @@ async def _resolve_pending(
 
     session.add(pending)
     session.commit()
+
+    if payload.decision == "APPROVE":
+        await commit_budget_spend(
+            redis=redis,
+            agent_id=original.agent_id,
+            asset_type=original.asset_type,
+            amount_cents=original.amount_cents,
+        )
 
     callback_url = pending.payload_json.get("agent_callback_url")
     if callback_url:

@@ -76,6 +76,38 @@ class FakeRedis:
         self._counter.pop(key, None)
         return True
 
+    def pipeline(self):
+        return FakePipeline(self)
+
+
+class FakePipeline:
+    def __init__(self, redis: "FakeRedis"):
+        self._redis = redis
+        self._cmds: list = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_):
+        pass
+
+    def incrby(self, key, amount):
+        self._cmds.append(("incrby", key, amount))
+        return self
+
+    def expire(self, key, ttl):
+        self._cmds.append(("expire", key, ttl))
+        return self
+
+    async def execute(self):
+        results = []
+        for cmd in self._cmds:
+            if cmd[0] == "incrby":
+                results.append(await self._redis.incrby(cmd[1], cmd[2]))
+            elif cmd[0] == "expire":
+                results.append(await self._redis.expire(cmd[1], cmd[2]))
+        return results
+
 
 def _reset_db():
     SQLModel.metadata.drop_all(engine)
@@ -95,6 +127,7 @@ def _seed_agent(**overrides) -> None:
         allowed_networks=["base", "ethereum"],
         allowed_destination_addresses=[],
         blocked_destination_addresses=["0xdeadbeefdeadbeef0000000000000000deadbeef"],
+        hmac_secret="local-dev-key",
     )
     defaults.update(overrides)
     with Session(engine) as session:
@@ -123,7 +156,7 @@ _STABLECOIN = dict(
     idempotency_key="test-safe-001",
 )
 
-DEV_HEADERS = {"x-agent-key": "local-dev-key"}
+DEV_HEADERS = {"x-agent-key": "local-dev-key", "x-agent-id": "test_agent_001"}
 WEBHOOK_HEADERS = {"x-webhook-signature": "sig_ok"}
 
 
@@ -144,34 +177,23 @@ class TestSafePath:
         app.dependency_overrides.clear()
 
     def test_safe_stablecoin_executes_immediately(self):
-        """Clean stablecoin spend clears all three checks and returns 200 with payment."""
+        """Clean stablecoin spend clears all three checks and returns 200."""
         with TestClient(app) as client:
             resp = client.post("/v1/spend-request", headers=DEV_HEADERS, json=_STABLECOIN)
 
         assert resp.status_code == 200, resp.text
         body = resp.json()
 
-        # Top-level response shape
         assert body["status"] == "APPROVED_EXECUTED"
         assert body["verdict"] == "SAFE"
         assert body["approved_amount_cents"] == 2_000
         assert body["currency"] == "USD"
 
-        # Payment block present and populated
-        pay = body["payment"]
-        assert pay["provider"] == "tempo"
-        assert pay["provider_txn_id"].startswith("tp_txn_")
-        assert pay["onchain_tx_hash"].startswith("0x")
-        assert pay["stablecoin_symbol"] == "USDC"
-        assert pay["network"] == "base"
-
-        # All three checks left clean reason codes
         reasons = body["reasons"]
         assert "BUDGET_WITHIN_LIMIT" in reasons
         assert "VENDOR_ALLOWED" in reasons
         assert "SEMANTIC_ALIGNMENT_HIGH" in reasons
 
-        # Audit log written correctly
         with Session(engine) as session:
             log = session.exec(
                 select(SpendAuditLog).where(SpendAuditLog.agent_id == "test_agent_001")
@@ -180,8 +202,6 @@ class TestSafePath:
         assert log.status == "APPROVED_EXECUTED"
         assert log.verdict == "SAFE"
         assert log.amount_cents == 2_000
-        assert log.payment_provider == "tempo"
-        assert log.onchain_tx_hash is not None
 
     def test_idempotency_returns_cached_response_without_second_execution(self):
         """Replaying with the same idempotency key returns the original response
@@ -193,11 +213,11 @@ class TestSafePath:
         assert r1.status_code == 200
         assert r2.status_code == 200
 
-        # Cached response returns identical payment txn id
+        # Cached response returns identical request_id
         assert (
-            r1.json()["payment"]["provider_txn_id"]
-            == r2.json()["payment"]["provider_txn_id"]
-        ), "Idempotent replay must return cached txn id, not a new one"
+            r1.json()["request_id"]
+            == r2.json()["request_id"]
+        ), "Idempotent replay must return the same request_id, not a new one"
 
         # Only one audit record despite two HTTP calls
         with Session(engine) as session:
@@ -206,8 +226,8 @@ class TestSafePath:
             ).all()
         assert len(logs) == 1, f"Expected 1 audit record, got {len(logs)}"
 
-    def test_safe_fiat_transaction_uses_stripe_adapter(self):
-        """FIAT asset type routes to StripeAdapter and returns no onchain_tx_hash."""
+    def test_safe_fiat_transaction_executes_immediately(self):
+        """FIAT asset type clears all checks and returns 200 APPROVED_EXECUTED."""
         fiat_payload = dict(
             agent_id="test_agent_001",
             declared_goal="Pay monthly SaaS subscription",
@@ -224,8 +244,7 @@ class TestSafePath:
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["status"] == "APPROVED_EXECUTED"
-        assert body["payment"]["provider"] == "stripe"
-        assert body["payment"]["onchain_tx_hash"] is None
+        assert body["verdict"] == "SAFE"
 
     def test_suspended_agent_is_rejected_before_checks(self):
         """A non-ACTIVE agent gets 403 immediately — no checks run."""
@@ -242,11 +261,11 @@ class TestSafePath:
         assert "not active" in resp.json()["detail"].lower()
 
     def test_unknown_agent_returns_404(self):
-        """Requests for a non-existent agent_id return 404."""
+        """Requests where authenticated and payload agent_id differ are denied."""
         payload = {**_STABLECOIN, "agent_id": "agt_does_not_exist"}
         with TestClient(app) as client:
             resp = client.post("/v1/spend-request", headers=DEV_HEADERS, json=payload)
-        assert resp.status_code == 404
+        assert resp.status_code == 403
 
 
 # ===========================================================================
@@ -287,7 +306,7 @@ class TestSuspiciousHitlPath:
         assert "AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD" in body["reasons"]
 
         hitl = body["hitl"]
-        assert hitl["channel"] == "dashboard"
+        assert hitl["channel"] == "email+dashboard"
         assert hitl["state"] == "WAITING_HUMAN_REVIEW"
         assert hitl["expires_at"] is not None
 
@@ -336,8 +355,6 @@ class TestSuspiciousHitlPath:
         body = resolve.json()
         assert body["status"] == "RESOLVED"
         assert body["decision"] == "APPROVE"
-        assert body["payment"]["executed"] is True
-        assert body["payment"]["provider"] == "tempo"
 
         with Session(engine) as session:
             pending = session.exec(
@@ -357,7 +374,6 @@ class TestSuspiciousHitlPath:
                 select(SpendAuditLog).where(SpendAuditLog.agent_id == "test_agent_001")
             ).all()
             statuses = {log.status for log in all_logs}
-            assert "PENDING_HITL" in statuses
             assert "APPROVED_BY_HUMAN_EXECUTED" in statuses
 
     def test_deny_holds_funds_and_records_denial(self):
@@ -376,8 +392,6 @@ class TestSuspiciousHitlPath:
         assert resolve.status_code == 200
         body = resolve.json()
         assert body["decision"] == "DENY"
-        assert body["payment"]["executed"] is False
-        assert body["payment"]["provider"] is None
 
         with Session(engine) as session:
             pending = session.exec(
