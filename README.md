@@ -246,7 +246,6 @@ Migration artifacts:
 ## Security + Reliability Notes
 
 - Production auth verification is implemented in `app/core/security.py`:
-  - Bearer JWT (`Authorization: Bearer <token>`)
   - HMAC signed agent requests (`x-agent-id`, `x-timestamp`, `x-signature`)
   - HMAC signed webhook requests (`x-webhook-timestamp`, `x-webhook-signature`)
 - Signature replay protection enforced with timestamp tolerance (`SIGNATURE_TOLERANCE_SECONDS`)
@@ -268,7 +267,7 @@ Migration artifacts:
 
 1. Copy env template and fill in secrets:
    - `cp .env.example .env`
-   - Set `ANTHROPIC_API_KEY`, `SENDGRID_API_KEY`, `JWT_SECRET`, `AGENT_HMAC_SECRET`, `WEBHOOK_HMAC_SECRET`
+   - Set `ANTHROPIC_API_KEY`, `SENDGRID_API_KEY`, `AGENT_HMAC_SECRET`, `WEBHOOK_HMAC_SECRET`
 2. Install dependencies (uses `uv`):
    - `uv sync`
 3. Start infra (Postgres + Redis):
@@ -286,9 +285,6 @@ Migration artifacts:
 Configure these values in `.env` for production:
 
 - `ANTHROPIC_API_KEY` — Claude Haiku semantic check
-- `JWT_ALGORITHM`
-- `JWT_SECRET`
-- `JWT_AUDIENCE`
 - `AGENT_HMAC_SECRET`
 - `WEBHOOK_HMAC_SECRET`
 - `SIGNATURE_TOLERANCE_SECONDS`

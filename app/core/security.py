@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-import jwt
 from fastapi import Header, HTTPException, Request, status
 from sqlmodel import Session, select
 
@@ -61,36 +60,6 @@ def _verify_hmac(secret: str, message: str, signature: str) -> bool:
     return hmac.compare_digest(expected, _normalize_signature(signature))
 
 
-def _verify_jwt_bearer(token: str) -> AuthContext:
-    settings = get_settings()
-    try:
-        claims = jwt.decode(
-            token,
-            settings.jwt_secret,
-            algorithms=[settings.jwt_algorithm],
-            audience=settings.jwt_audience,
-        )
-    except jwt.InvalidTokenError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid JWT token",
-        ) from exc
-
-    agent_id = claims.get("agent_id") or claims.get("sub")
-    if not isinstance(agent_id, str) or not agent_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="JWT missing agent identity",
-        )
-
-    return AuthContext(
-        principal_id=str(claims.get("sub", agent_id)),
-        method="jwt",
-        agent_id=agent_id,
-        claims=claims,
-    )
-
-
 async def verify_agent_auth(
     request: Request,
     authorization: str | None = Header(default=None),
@@ -101,10 +70,11 @@ async def verify_agent_auth(
 ) -> AuthContext:
     settings = get_settings()
 
-    # Preferred production method #1: JWT bearer auth.
     if authorization and authorization.lower().startswith("bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-        return _verify_jwt_bearer(token)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Bearer auth is disabled in this MVP. Use HMAC headers.",
+        )
 
     # Preferred production method #2: HMAC signed request.
     if x_agent_id and x_timestamp and x_signature:
@@ -175,7 +145,7 @@ async def verify_agent_auth(
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing authentication. Provide Bearer JWT or HMAC signature headers.",
+        detail="Missing authentication. Provide HMAC signature headers.",
     )
 
 
