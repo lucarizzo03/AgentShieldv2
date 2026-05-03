@@ -7,7 +7,7 @@ from app.models.user import User
 
 
 def get_or_create_user(session: Session, auth: UserAuthContext) -> User:
-    user = session.exec(select(User).where(User.cognito_sub == auth.sub)).first()
+    user = session.exec(select(User).where(User.auth_subject == auth.sub)).first()
     now = datetime.now(timezone.utc)
     if user:
         changed = False
@@ -25,7 +25,7 @@ def get_or_create_user(session: Session, auth: UserAuthContext) -> User:
         return user
 
     user = User(
-        cognito_sub=auth.sub,
+        auth_subject=auth.sub,
         email=auth.email or f"{auth.sub}@unknown.local",
         display_name=auth.display_name,
         created_at=now,

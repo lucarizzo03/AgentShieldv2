@@ -20,16 +20,16 @@ def upgrade() -> None:
     op.create_table(
         "users",
         sa.Column("id", sa.Uuid(), nullable=False),
-        sa.Column("cognito_sub", sa.String(length=128), nullable=False),
+        sa.Column("auth_subject", sa.String(length=128), nullable=False),
         sa.Column("email", sa.String(length=320), nullable=False),
         sa.Column("display_name", sa.String(length=128), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("cognito_sub"),
+        sa.UniqueConstraint("auth_subject"),
         sa.UniqueConstraint("email"),
     )
-    op.create_index("ix_users_cognito_sub", "users", ["cognito_sub"], unique=False)
+    op.create_index("ix_users_auth_subject", "users", ["auth_subject"], unique=False)
     op.create_index("ix_users_email", "users", ["email"], unique=False)
 
     op.add_column("agent", sa.Column("owner_user_id", sa.Uuid(), nullable=True))
@@ -66,5 +66,5 @@ def downgrade() -> None:
     op.drop_column("agent", "owner_user_id")
 
     op.drop_index("ix_users_email", table_name="users")
-    op.drop_index("ix_users_cognito_sub", table_name="users")
+    op.drop_index("ix_users_auth_subject", table_name="users")
     op.drop_table("users")
