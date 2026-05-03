@@ -1,4 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/v1";
+const AUTH_STORAGE_KEY = "agentshield_id_token";
 
 export function authHeaders(agentId, extra = {}) {
   return {
@@ -10,7 +11,15 @@ export function authHeaders(agentId, extra = {}) {
 }
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, options);
+  const { authMode = "user", headers = {}, ...rest } = options;
+  const finalHeaders = { ...headers };
+  if (authMode === "user") {
+    const token = localStorage.getItem(AUTH_STORAGE_KEY);
+    if (token && !finalHeaders.Authorization) {
+      finalHeaders.Authorization = `Bearer ${token}`;
+    }
+  }
+  const response = await fetch(`${API_BASE}${path}`, { ...rest, headers: finalHeaders });
   if (!response.ok) {
     let message = `Request failed: ${response.status}`;
     try {
@@ -26,7 +35,7 @@ async function request(path, options = {}) {
 }
 
 export async function listAgents() {
-  return request("/agents");
+  return request("/agents", { authMode: "user" });
 }
 
 export async function createAgent(payload) {
@@ -34,24 +43,25 @@ export async function createAgent(payload) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    authMode: "user",
   });
 }
 
 export async function getDashboardStats(agentId) {
   return request(`/dashboard/agents/${agentId}/stats`, {
-    headers: authHeaders(agentId),
+    authMode: "user",
   });
 }
 
 export async function getActivity(agentId) {
   return request(`/dashboard/agents/${agentId}/activity?limit=100`, {
-    headers: authHeaders(agentId),
+    authMode: "user",
   });
 }
 
 export async function getNotifications(agentId) {
   return request(`/dashboard/agents/${agentId}/notifications?status=OPEN&limit=50`, {
-    headers: authHeaders(agentId),
+    authMode: "user",
   });
 }
 
@@ -62,6 +72,7 @@ export async function resolveRequest(requestId, decision, resolverId = "dashboar
       ...authHeaders(undefined),
       "x-webhook-signature": "sig_ok",
     },
+    authMode: "none",
     body: JSON.stringify({
       decision,
       resolver_id: resolverId,
@@ -75,6 +86,7 @@ export async function submitSpendRequest(agentId, payload) {
     method: "POST",
     headers: authHeaders(agentId),
     body: JSON.stringify(payload),
+    authMode: "none",
   });
 }
 
@@ -83,12 +95,14 @@ export async function bootstrapOnboarding(payload) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
+    authMode: "none",
   });
 }
 
 export async function getOnboardingChecklist(agentId) {
   return request(`/onboarding/agents/${agentId}/checklist`, {
     headers: authHeaders(agentId),
+    authMode: "none",
   });
 }
 
@@ -97,6 +111,7 @@ export async function startPhoneVerification(agentId, phoneNumber) {
     method: "POST",
     headers: authHeaders(agentId),
     body: JSON.stringify({ phone_number: phoneNumber }),
+    authMode: "none",
   });
 }
 
@@ -105,6 +120,7 @@ export async function verifyPhone(agentId, phoneNumber, code) {
     method: "POST",
     headers: authHeaders(agentId),
     body: JSON.stringify({ phone_number: phoneNumber, code }),
+    authMode: "none",
   });
 }
 
@@ -113,6 +129,7 @@ export async function updateHitlPreferences(agentId, prefs) {
     method: "PATCH",
     headers: authHeaders(agentId),
     body: JSON.stringify(prefs),
+    authMode: "none",
   });
 }
 

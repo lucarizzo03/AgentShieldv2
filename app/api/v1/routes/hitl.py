@@ -22,6 +22,7 @@ from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
 from app.policy.checks.quantitative import commit_budget_spend
+from app.services.activity_log import append_agent_activity
 from app.services.hitl.state_manager import apply_resolution, ensure_pending_is_resolvable
 
 
@@ -116,6 +117,12 @@ async def _resolve_pending(
                 status="APPROVED_BY_HUMAN_EXECUTED",
             )
         session.add(audit)
+        append_agent_activity(
+            session,
+            agent_id=original.agent_id,
+            event_type="HITL_APPROVED",
+            event_payload={"request_id": request_id, "resolver_id": payload.resolver_id},
+        )
     else:
         increment("hitl.decision.deny")
         original = pending.payload_json
@@ -145,6 +152,12 @@ async def _resolve_pending(
                 status="DENIED_BY_HUMAN",
             )
         session.add(audit)
+        append_agent_activity(
+            session,
+            agent_id=original["agent_id"],
+            event_type="HITL_DENIED",
+            event_payload={"request_id": request_id, "resolver_id": payload.resolver_id},
+        )
 
     notification = session.exec(
         select(DashboardNotification).where(DashboardNotification.request_id == request_id)

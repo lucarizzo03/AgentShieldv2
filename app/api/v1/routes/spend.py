@@ -17,6 +17,7 @@ from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
 from app.policy.checks.quantitative import commit_budget_spend, transaction_fingerprint
 from app.policy.engine import run_financial_triangulation
+from app.services.activity_log import append_agent_activity
 from app.services.hitl.notifier import HitlNotifier
 from app.services.idempotency import cache_idempotent_response, read_cached_idempotent_response
 from app.services.slm.client import LocalSlmClient
@@ -110,6 +111,18 @@ async def spend_request(
             status="APPROVED_EXECUTED",
         )
         session.add(audit)
+        append_agent_activity(
+            session,
+            agent_id=payload.agent_id,
+            event_type="SPEND_SAFE_APPROVED",
+            event_payload={
+                "request_id": request_id,
+                "amount_cents": payload.amount_cents,
+                "currency": payload.currency,
+                "vendor_url_or_name": payload.vendor_url_or_name,
+                "reasons": tri.reasons,
+            },
+        )
         session.commit()
         await commit_budget_spend(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
         body = {
@@ -144,6 +157,18 @@ async def spend_request(
             status="BLOCKED",
         )
         session.add(audit)
+        append_agent_activity(
+            session,
+            agent_id=payload.agent_id,
+            event_type="SPEND_BLOCKED",
+            event_payload={
+                "request_id": request_id,
+                "amount_cents": payload.amount_cents,
+                "currency": payload.currency,
+                "vendor_url_or_name": payload.vendor_url_or_name,
+                "reasons": tri.reasons,
+            },
+        )
         session.commit()
         body = {
             "request_id": request_id,
@@ -225,6 +250,19 @@ async def spend_request(
     session.add(pending)
     session.add(notification)
     session.add(audit)
+    append_agent_activity(
+        session,
+        agent_id=payload.agent_id,
+        event_type="HITL_PENDING_CREATED",
+        event_payload={
+            "request_id": request_id,
+            "amount_cents": payload.amount_cents,
+            "currency": payload.currency,
+            "vendor_url_or_name": payload.vendor_url_or_name,
+            "reasons": tri.reasons,
+            "expires_at": pending.expires_at.isoformat(),
+        },
+    )
     session.commit()
     await HitlNotifier().send_notification(agent=agent, pending=pending)
 

@@ -34,6 +34,7 @@ import {
   updateHitlPreferences,
   verifyPhone,
 } from "./lib/api";
+import { logout } from "./lib/auth";
 
 const emptyChart = [
   { t: "00:00", safe: 0, blocked: 0, pending: 0 },
@@ -617,6 +618,22 @@ print(response.status_code, response.text)`;
                 ))}
               </select>
             ) : null}
+            <button
+              type="button"
+              onClick={logout}
+              style={{
+                height: 28,
+                border: "1px solid var(--border)",
+                background: "transparent",
+                color: "var(--text-2)",
+                padding: "0 8px",
+                fontSize: 11,
+                fontFamily: "var(--font-mono)",
+                cursor: "pointer",
+              }}
+            >
+              Sign out
+            </button>
           </div>
         </header>
 

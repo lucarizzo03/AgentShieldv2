@@ -11,22 +11,28 @@ from app.api.v1.schemas.dashboard import (
     DashboardNotificationAckResponse,
     DashboardNotificationListResponse,
 )
-from app.core.security import AuthContext, verify_agent_auth
+from app.core.security import UserAuthContext, verify_user_auth
 from app.db.postgres import get_session
 from app.models.agent import Agent
 from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
+from app.services.user_identity import get_or_create_user
 
 router = APIRouter(tags=["dashboard"])
 
 
-def _ensure_scope(auth_context: AuthContext, agent_id: str) -> None:
-    if auth_context.agent_id and auth_context.agent_id != agent_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Authenticated agent_id does not match requested agent_id",
-        )
+def _load_owned_agent(session: Session, *, auth_context: UserAuthContext, owner_user_id, agent_id: str) -> Agent:
+    query = select(Agent).where(Agent.agent_id == agent_id)
+    if auth_context.agent_id:
+        if auth_context.agent_id != agent_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    else:
+        query = query.where(Agent.owner_user_id == owner_user_id)
+    agent = session.exec(query).first()
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    return agent
 
 
 @router.get("/dashboard/agents/{agent_id}/notifications", response_model=DashboardNotificationListResponse)
@@ -34,13 +40,11 @@ async def list_dashboard_notifications(
     agent_id: str,
     notification_status: str = Query(default="OPEN", alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
-    auth_context: AuthContext = Depends(verify_agent_auth),
+    auth_context: UserAuthContext = Depends(verify_user_auth),
     session: Session = Depends(get_session),
 ):
-    _ensure_scope(auth_context, agent_id)
-    agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
-    if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    user = None if auth_context.agent_id else get_or_create_user(session, auth_context)
+    _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
 
     rows = session.exec(
         select(DashboardNotification)
@@ -97,10 +101,11 @@ async def update_dashboard_notification(
     agent_id: str,
     notification_id: UUID,
     payload: DashboardNotificationAckRequest,
-    auth_context: AuthContext = Depends(verify_agent_auth),
+    auth_context: UserAuthContext = Depends(verify_user_auth),
     session: Session = Depends(get_session),
 ):
-    _ensure_scope(auth_context, agent_id)
+    user = None if auth_context.agent_id else get_or_create_user(session, auth_context)
+    _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
     notification = session.exec(select(DashboardNotification).where(DashboardNotification.id == notification_id)).first()
     if not notification or notification.agent_id != agent_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
@@ -110,7 +115,7 @@ async def update_dashboard_notification(
 
     now = datetime.now(timezone.utc)
     notification.status = "ACKED" if payload.action == "ACK" else "DISMISSED"
-    notification.acknowledged_by = auth_context.principal_id
+    notification.acknowledged_by = auth_context.email or auth_context.sub
     notification.acknowledged_at = now
     notification.updated_at = now
     session.add(notification)
@@ -128,13 +133,11 @@ async def update_dashboard_notification(
 async def list_agent_activity(
     agent_id: str,
     limit: int = Query(default=100, ge=1, le=500),
-    auth_context: AuthContext = Depends(verify_agent_auth),
+    auth_context: UserAuthContext = Depends(verify_user_auth),
     session: Session = Depends(get_session),
 ):
-    _ensure_scope(auth_context, agent_id)
-    agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
-    if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    user = None if auth_context.agent_id else get_or_create_user(session, auth_context)
+    _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
 
     rows = session.exec(
         select(SpendAuditLog)
@@ -173,13 +176,11 @@ async def list_agent_activity(
 @router.get("/dashboard/agents/{agent_id}/stats", response_model=DashboardStatsResponse)
 async def get_dashboard_stats(
     agent_id: str,
-    auth_context: AuthContext = Depends(verify_agent_auth),
+    auth_context: UserAuthContext = Depends(verify_user_auth),
     session: Session = Depends(get_session),
 ):
-    _ensure_scope(auth_context, agent_id)
-    agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
-    if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    user = None if auth_context.agent_id else get_or_create_user(session, auth_context)
+    _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
 
     day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     today_rows = session.exec(

@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     hitl_email_from: str = Field(default="")
     hitl_email_to: str = Field(default="")
     api_public_url: str = Field(default="http://localhost:8000")
+    cognito_region: str = Field(default="")
+    cognito_user_pool_id: str = Field(default="")
+    cognito_client_id: str = Field(default="")
+    cognito_issuer: str = Field(default="")
+    dev_user_token: str = Field(default="dev-user-token")
+    dev_user_sub: str = Field(default="dev-user-001")
+    dev_user_email: str = Field(default="dev-user@example.com")
 
 
 @lru_cache(maxsize=1)

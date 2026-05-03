@@ -20,6 +20,7 @@ class Agent(SQLModel, table=True):
     )
     allowed_destination_addresses: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     blocked_destination_addresses: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    owner_user_id: UUID | None = Field(default=None, foreign_key="users.id", index=True)
     hmac_secret: str | None = Field(default=None, max_length=256)
     hmac_secret_rotated_at: datetime | None = Field(default=None)
     hitl_required_over_cents: int | None = Field(default=None)
