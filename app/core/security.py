@@ -2,8 +2,10 @@ import hashlib
 import hmac
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 
+import jwt
 from fastapi import Header, HTTPException, Request, status
 from sqlmodel import Session, select
 
@@ -58,6 +60,62 @@ def _validate_timestamp(timestamp: str, tolerance_seconds: int) -> None:
 def _verify_hmac(secret: str, message: str, signature: str) -> bool:
     expected = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, _normalize_signature(signature))
+
+
+def _auth0_issuer() -> str:
+    settings = get_settings()
+    if settings.auth0_issuer:
+        return settings.auth0_issuer.rstrip("/")
+    if settings.auth0_domain:
+        domain = settings.auth0_domain.rstrip("/")
+        if domain.startswith("https://"):
+            return domain + "/"
+        return f"https://{domain}/"
+    return ""
+
+
+@lru_cache(maxsize=1)
+def _auth0_jwks_client(issuer: str) -> jwt.PyJWKClient:
+    return jwt.PyJWKClient(f"{issuer}.well-known/jwks.json")
+
+
+def _verify_auth0_bearer(token: str) -> UserAuthContext:
+    settings = get_settings()
+    issuer = _auth0_issuer()
+    if not issuer or not settings.auth0_audience:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Auth0 is not configured for this environment",
+        )
+    try:
+        signing_key = _auth0_jwks_client(issuer).get_signing_key_from_jwt(token).key
+        claims = jwt.decode(
+            token,
+            signing_key,
+            algorithms=["RS256"],
+            audience=settings.auth0_audience,
+            issuer=issuer,
+        )
+    except jwt.InvalidTokenError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid Auth0 token",
+        ) from exc
+    sub = claims.get("sub")
+    if not isinstance(sub, str) or not sub:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Auth0 token missing subject",
+        )
+    email = claims.get("email")
+    display_name = claims.get("name") or claims.get("nickname")
+    return UserAuthContext(
+        sub=sub,
+        email=email if isinstance(email, str) else None,
+        display_name=display_name if isinstance(display_name, str) else None,
+        method="auth0",
+        claims=claims,
+    )
 
 
 async def verify_agent_auth(
@@ -166,10 +224,7 @@ async def verify_user_auth(
                 method="dev-user-token",
                 claims={"sub": settings.dev_user_sub, "email": settings.dev_user_email},
             )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unsupported user token for current environment",
-        )
+        return _verify_auth0_bearer(token)
 
     if settings.app_env == "dev" and x_agent_id and x_agent_key:
         with Session(engine) as session:
@@ -195,7 +250,7 @@ async def verify_user_auth(
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing user authentication. Provide Bearer token or dev agent headers.",
+        detail="Missing user authentication. Provide Bearer token.",
     )
 
 
