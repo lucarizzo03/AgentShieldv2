@@ -4,7 +4,6 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import App from "./App";
 import "./index.css";
 import { isAuthenticated } from "./lib/auth";
-import AuthCallbackView from "./views/AuthCallbackView";
 import AuthView from "./views/AuthView";
 import LandingView from "./views/LandingView";
 
@@ -21,7 +20,6 @@ ReactDOM.createRoot(document.getElementById("root")).render(
       <Routes>
         <Route path="/" element={<LandingView />} />
         <Route path="/auth" element={<AuthView />} />
-        <Route path="/auth/callback" element={<AuthCallbackView />} />
         <Route
           path="/app"
           element={
