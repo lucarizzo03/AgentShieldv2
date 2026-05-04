@@ -340,11 +340,25 @@ export default function App() {
     e.preventDefault();
     if (loading) return;
     if (!form.name || form.daily === "" || form.perTx === "" || form.auto === "") return;
+    const dailyUsd = Math.trunc(Number(form.daily));
+    const perTxnUsd = Math.trunc(Number(form.perTx));
+    const autoApproveUsd = Math.trunc(Number(form.auto));
+    if (
+      !Number.isFinite(dailyUsd) ||
+      !Number.isFinite(perTxnUsd) ||
+      !Number.isFinite(autoApproveUsd) ||
+      dailyUsd < 0 ||
+      perTxnUsd < 0 ||
+      autoApproveUsd < 0
+    ) {
+      toast("Spend limits must be non-negative numbers.");
+      return;
+    }
     createAgentRequest({
       agent_name: form.name,
-      daily_spend_limit_usd: Number(form.daily),
-      per_transaction_limit_usd: Number(form.perTx),
-      auto_approve_under_usd: Number(form.auto),
+      daily_spend_limit_usd: dailyUsd,
+      per_transaction_limit_usd: perTxnUsd,
+      auto_approve_under_usd: autoApproveUsd,
       blocked_vendors: form.blocked,
       asset_type: form.asset,
       allowed_networks: form.networks,
