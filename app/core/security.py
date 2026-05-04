@@ -65,7 +65,10 @@ def _verify_hmac(secret: str, message: str, signature: str) -> bool:
 def _auth0_issuer() -> str:
     settings = get_settings()
     if settings.auth0_issuer:
-        return settings.auth0_issuer.rstrip("/")
+        issuer = settings.auth0_issuer.strip()
+        if not issuer.startswith("https://"):
+            issuer = f"https://{issuer}"
+        return issuer.rstrip("/") + "/"
     if settings.auth0_domain:
         domain = settings.auth0_domain.rstrip("/")
         if domain.startswith("https://"):
@@ -76,7 +79,7 @@ def _auth0_issuer() -> str:
 
 @lru_cache(maxsize=1)
 def _auth0_jwks_client(issuer: str) -> jwt.PyJWKClient:
-    return jwt.PyJWKClient(f"{issuer}.well-known/jwks.json")
+    return jwt.PyJWKClient(f"{issuer.rstrip('/')}/.well-known/jwks.json")
 
 
 def _verify_auth0_bearer(token: str) -> UserAuthContext:
