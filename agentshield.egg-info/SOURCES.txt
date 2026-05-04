@@ -34,11 +34,14 @@ app/migrations/env.py
 app/migrations/versions/20260418_0001_initial_schema.py
 app/migrations/versions/20260420_0002_agent_hmac_secret.py
 app/migrations/versions/20260430_0003_pending_spend_hitl_fields.py
+app/migrations/versions/20260501_0004_users_agent_activity.py
 app/models/__init__.py
 app/models/agent.py
+app/models/agent_activity.py
 app/models/dashboard_notification.py
 app/models/pending_spend.py
 app/models/spend_audit_log.py
+app/models/user.py
 app/policy/__init__.py
 app/policy/engine.py
 app/policy/verdicts.py
@@ -47,7 +50,9 @@ app/policy/checks/policy_db.py
 app/policy/checks/quantitative.py
 app/policy/checks/semantic.py
 app/services/__init__.py
+app/services/activity_log.py
 app/services/idempotency.py
+app/services/user_identity.py
 app/services/hitl/__init__.py
 app/services/hitl/notifier.py
 app/services/hitl/state_manager.py
