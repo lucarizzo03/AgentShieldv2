@@ -171,9 +171,9 @@ async def verify_agent_auth(
             )
         return AuthContext(principal_id=x_agent_id, method="hmac", agent_id=x_agent_id)
 
-    # Dev-only compatibility for earlier prototype clients.
-    # This fallback still enforces agent scoping by requiring both agent_id and a
-    # matching per-agent key from the database.
+    # Dev-only compatibility. "local-dev-key" is a universal dev bypass that only
+    # verifies the agent exists — no secret comparison. Any other key is compared
+    # against the agent's actual HMAC secret for tighter dev/staging scoping.
     if settings.app_env == "dev" and x_agent_key:
         if not x_agent_id:
             raise HTTPException(
@@ -187,16 +187,17 @@ async def verify_agent_auth(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Unknown agent_id for dev authentication",
                 )
-            if not agent.hmac_secret:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Agent has no HMAC secret — rotate credentials first",
-                )
-            if not hmac.compare_digest(agent.hmac_secret, x_agent_key):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid dev agent key",
-                )
+            if x_agent_key != "local-dev-key":
+                if not agent.hmac_secret:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Agent has no HMAC secret — rotate credentials first",
+                    )
+                if not hmac.compare_digest(agent.hmac_secret, x_agent_key):
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Invalid dev agent key",
+                    )
 
         return AuthContext(
             principal_id=x_agent_id,
