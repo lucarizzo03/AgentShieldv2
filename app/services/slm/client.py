@@ -48,10 +48,10 @@ Output: {"alignment_label": "MISMATCH", "risk_score": 97, "reason_codes": ["VEND
 Now evaluate the following transaction and output ONLY the JSON object, no other text:"""
 
 
-class LocalSlmClient:
+class AnthropicSemanticClient:
     def __init__(self) -> None:
         settings = get_settings()
-        self._model = settings.slm_model_name
+        self._model = settings.anthropic_model_name
         self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
 
     async def semantic_alignment(

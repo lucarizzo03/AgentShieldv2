@@ -27,7 +27,7 @@ class UserAuthContext:
     sub: str
     email: str | None
     display_name: str | None
-    method: str = "dev-user-token"
+    method: str = "auth0"
     agent_id: str | None = None
     claims: dict[str, Any] = field(default_factory=dict)
 
@@ -123,21 +123,12 @@ def _verify_auth0_bearer(token: str) -> UserAuthContext:
 
 async def verify_agent_auth(
     request: Request,
-    authorization: str | None = Header(default=None),
     x_agent_id: str | None = Header(default=None),
     x_timestamp: str | None = Header(default=None),
     x_signature: str | None = Header(default=None),
-    x_agent_key: str | None = Header(default=None),
 ) -> AuthContext:
     settings = get_settings()
 
-    if authorization and authorization.lower().startswith("bearer "):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Bearer auth is disabled in this MVP. Use HMAC headers.",
-        )
-
-    # Preferred production method #2: HMAC signed request.
     if x_agent_id and x_timestamp and x_signature:
         _validate_timestamp(x_timestamp, settings.signature_tolerance_seconds)
         body_hash = _body_sha256(await request.body())
@@ -155,7 +146,7 @@ async def verify_agent_auth(
             if not agent:
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Unknown agent_id for HMAC authentication",
+                    detail="Unknown agent_id",
                 )
             if not agent.hmac_secret:
                 raise HTTPException(
@@ -171,90 +162,21 @@ async def verify_agent_auth(
             )
         return AuthContext(principal_id=x_agent_id, method="hmac", agent_id=x_agent_id)
 
-    # Dev-only compatibility. "local-dev-key" is a universal dev bypass that only
-    # verifies the agent exists — no secret comparison. Any other key is compared
-    # against the agent's actual HMAC secret for tighter dev/staging scoping.
-    if settings.app_env == "dev" and x_agent_key:
-        if not x_agent_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="x-agent-id header is required with x-agent-key in dev mode",
-            )
-        with Session(engine) as session:
-            agent = session.exec(select(Agent).where(Agent.agent_id == x_agent_id)).first()
-            if not agent:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Unknown agent_id for dev authentication",
-                )
-            if x_agent_key != "local-dev-key":
-                if not agent.hmac_secret:
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Agent has no HMAC secret — rotate credentials first",
-                    )
-                if not hmac.compare_digest(agent.hmac_secret, x_agent_key):
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Invalid dev agent key",
-                    )
-
-        return AuthContext(
-            principal_id=x_agent_id,
-            method="legacy",
-            agent_id=x_agent_id,
-        )
-
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing authentication. Provide HMAC signature headers.",
+        detail="Missing authentication. Provide HMAC signature headers (x-agent-id, x-timestamp, x-signature).",
     )
 
 
 async def verify_user_auth(
-    request: Request,
     authorization: str | None = Header(default=None),
-    x_agent_id: str | None = Header(default=None),
-    x_agent_key: str | None = Header(default=None),
 ) -> UserAuthContext:
-    settings = get_settings()
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        if settings.app_env == "dev" and token == settings.dev_user_token:
-            return UserAuthContext(
-                sub=settings.dev_user_sub,
-                email=settings.dev_user_email,
-                display_name="Local Dev User",
-                method="dev-user-token",
-                claims={"sub": settings.dev_user_sub, "email": settings.dev_user_email},
-            )
         return _verify_auth0_bearer(token)
-
-    if settings.app_env == "dev" and x_agent_id and x_agent_key:
-        with Session(engine) as session:
-            agent = session.exec(select(Agent).where(Agent.agent_id == x_agent_id)).first()
-            if not agent or not agent.hmac_secret:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Unknown agent credentials for dashboard authentication",
-                )
-            if not hmac.compare_digest(agent.hmac_secret, x_agent_key):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid agent key for dashboard authentication",
-                )
-        return UserAuthContext(
-            sub=f"agent:{x_agent_id}",
-            email=None,
-            display_name=None,
-            method="legacy-agent",
-            agent_id=x_agent_id,
-            claims={"agent_id": x_agent_id},
-        )
-
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing user authentication. Provide Bearer token.",
+        detail="Missing user authentication. Provide Auth0 Bearer token.",
     )
 
 
@@ -264,10 +186,6 @@ async def verify_hitl_webhook_signature(
     x_webhook_timestamp: str | None = Header(default=None),
 ) -> None:
     settings = get_settings()
-
-    # Dev shortcut kept for existing integration tests/manual smoke tests.
-    if settings.app_env == "dev" and x_webhook_signature == "sig_ok":
-        return
 
     if not x_webhook_signature or not x_webhook_timestamp:
         raise HTTPException(
@@ -290,4 +208,3 @@ async def verify_hitl_webhook_signature(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid webhook signature",
         )
-

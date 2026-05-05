@@ -3,13 +3,13 @@ from app.policy.checks.policy_db import run_policy_checks
 from app.policy.checks.quantitative import run_quantitative_checks
 from app.policy.checks.semantic import run_semantic_checks
 from app.policy.verdicts import TriangulationResult
-from app.services.slm.client import LocalSlmClient
+from app.services.slm.client import AnthropicSemanticClient
 
 
 async def run_financial_triangulation(
     *,
     redis,
-    slm_client: LocalSlmClient,
+    semantic_client: AnthropicSemanticClient,
     agent: Agent,
     amount_cents: int,
     vendor_url_or_name: str,
@@ -20,7 +20,7 @@ async def run_financial_triangulation(
     network: str | None,
     destination_address: str | None,
     fingerprint: str,
-    dev_slm_preset: str | None = None,
+    dev_preset: str | None = None,
 ) -> TriangulationResult:
     quantitative = await run_quantitative_checks(
         redis=redis,
@@ -41,7 +41,7 @@ async def run_financial_triangulation(
         destination_address=destination_address,
     )
     semantic = await run_semantic_checks(
-        slm_client=slm_client,
+        semantic_client=semantic_client,
         declared_goal=declared_goal,
         amount_cents=amount_cents,
         vendor_url_or_name=vendor_url_or_name,
@@ -49,7 +49,7 @@ async def run_financial_triangulation(
         stablecoin_symbol=stablecoin_symbol,
         network=network,
         destination_address=destination_address,
-        dev_slm_preset=dev_slm_preset,
+        dev_preset=dev_preset,
     )
 
     reasons = [*quantitative.reasons, *policy.reasons, *semantic.reasons]
@@ -67,4 +67,3 @@ async def run_financial_triangulation(
         policy_result=policy.context,
         semantic_result=semantic.context,
     )
-

@@ -20,7 +20,7 @@ from app.policy.engine import run_financial_triangulation
 from app.services.activity_log import append_agent_activity
 from app.services.hitl.notifier import HitlNotifier
 from app.services.idempotency import cache_idempotent_response, read_cached_idempotent_response
-from app.services.slm.client import LocalSlmClient
+from app.services.slm.client import AnthropicSemanticClient
 
 router = APIRouter(tags=["spend"])
 
@@ -75,7 +75,7 @@ async def spend_request(
     settings = get_settings()
     tri = await run_financial_triangulation(
         redis=redis,
-        slm_client=LocalSlmClient(),
+        semantic_client=AnthropicSemanticClient(),
         agent=agent,
         amount_cents=payload.amount_cents,
         vendor_url_or_name=payload.vendor_url_or_name,
@@ -86,7 +86,7 @@ async def spend_request(
         network=payload.network,
         destination_address=payload.destination_address,
         fingerprint=fingerprint,
-        dev_slm_preset=payload.dev_slm_preset if settings.app_env == "dev" else None,
+        dev_preset=payload.dev_preset if settings.app_env == "dev" else None,
     )
 
     now = datetime.now(timezone.utc)
@@ -290,7 +290,11 @@ async def get_spend_request_status(
     auth_context: AuthContext = Depends(verify_agent_auth),
     session: Session = Depends(get_session),
 ):
-    audit = session.exec(select(SpendAuditLog).where(SpendAuditLog.request_id == request_id)).first()
+    audit = session.exec(
+        select(SpendAuditLog)
+        .where(SpendAuditLog.request_id == request_id)
+        .order_by(SpendAuditLog.created_at.desc())
+    ).first()
     if not audit:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
 
