@@ -23,8 +23,5 @@ class SpendAuditLog(SQLModel, table=True):
     semantic_result: dict = Field(default_factory=dict, sa_column=Column(JSON))
     verdict: str = Field(max_length=16)
     status: str = Field(max_length=48)
-    payment_provider: str | None = Field(default=None, max_length=32)
-    payment_txn_id: str | None = Field(default=None, max_length=128)
-    onchain_tx_hash: str | None = Field(default=None, index=True, max_length=256)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)
 

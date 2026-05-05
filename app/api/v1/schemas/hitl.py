@@ -14,16 +14,9 @@ class HitlResolveRequest(BaseModel):
     provider_message_id: str | None = Field(default=None, max_length=128)
 
 
-class HitlResolveResponsePayment(BaseModel):
-    executed: bool
-    provider: str | None = None
-    provider_txn_id: str | None = None
-
-
 class HitlResolveResponse(BaseModel):
     request_id: str
     status: Literal["RESOLVED"]
     decision: Literal["APPROVE", "DENY"]
     resolved_at: datetime
-    payment: HitlResolveResponsePayment
 
