@@ -13,13 +13,13 @@ class SpendRequest(BaseModel):
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     vendor_url_or_name: str = Field(min_length=2, max_length=512)
     item_description: str = Field(min_length=2, max_length=4000)
-    asset_type: Literal["STABLECOIN", "FIAT"]
+    asset_type: Literal["STABLECOIN"]
     stablecoin_symbol: Literal["USDC", "USDT", "USDC.e", "USDC.b"] | None = None
-    network: Literal["ethereum", "base", "solana", "polygon", "arbitrum", "tempo"] | None = None
+    network: Literal["ethereum", "base", "solana", "polygon", "arbitrum"] | None = None
     destination_address: str | None = Field(default=None, min_length=16, max_length=128)
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
     agent_callback_url: HttpUrl | None = None
-    dev_slm_preset: Literal["ALIGNED", "WEAK", "MISMATCH"] | None = None
+    dev_preset: Literal["ALIGNED", "WEAK", "MISMATCH"] | None = None
 
     @model_validator(mode="after")
     def validate_stablecoin_fields(self) -> "SpendRequest":

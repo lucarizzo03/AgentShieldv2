@@ -91,32 +91,24 @@ async def _resolve_pending(
     if payload.decision == "APPROVE":
         increment("hitl.decision.approve")
         original = SpendRequest.model_validate(pending.payload_json)
-        audit = session.exec(
-            select(SpendAuditLog).where(SpendAuditLog.request_id == request_id)
-        ).first()
-        if audit:
-            audit.status = "APPROVED_BY_HUMAN_EXECUTED"
-            audit.verdict = "SAFE"
-        else:
-            audit = SpendAuditLog(
-                request_id=request_id,
-                agent_id=original.agent_id,
-                declared_goal=original.declared_goal,
-                amount_cents=original.amount_cents,
-                currency=original.currency,
-                asset_type=original.asset_type,
-                stablecoin_symbol=original.stablecoin_symbol,
-                network=original.network,
-                destination_address=original.destination_address,
-                vendor_url_or_name=original.vendor_url_or_name,
-                item_description=original.item_description,
-                quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
-                policy_result=pending.verdict_snapshot.get("policy_result", {}),
-                semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
-                verdict="SAFE",
-                status="APPROVED_BY_HUMAN_EXECUTED",
-            )
-        session.add(audit)
+        session.add(SpendAuditLog(
+            request_id=request_id,
+            agent_id=original.agent_id,
+            declared_goal=original.declared_goal,
+            amount_cents=original.amount_cents,
+            currency=original.currency,
+            asset_type=original.asset_type,
+            stablecoin_symbol=original.stablecoin_symbol,
+            network=original.network,
+            destination_address=original.destination_address,
+            vendor_url_or_name=original.vendor_url_or_name,
+            item_description=original.item_description,
+            quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
+            policy_result=pending.verdict_snapshot.get("policy_result", {}),
+            semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
+            verdict="SAFE",
+            status="APPROVED_BY_HUMAN_EXECUTED",
+        ))
         append_agent_activity(
             session,
             agent_id=original.agent_id,
@@ -126,32 +118,24 @@ async def _resolve_pending(
     else:
         increment("hitl.decision.deny")
         original = pending.payload_json
-        audit = session.exec(
-            select(SpendAuditLog).where(SpendAuditLog.request_id == request_id)
-        ).first()
-        if audit:
-            audit.status = "DENIED_BY_HUMAN"
-            audit.verdict = "MALICIOUS"
-        else:
-            audit = SpendAuditLog(
-                request_id=request_id,
-                agent_id=original["agent_id"],
-                declared_goal=original["declared_goal"],
-                amount_cents=original["amount_cents"],
-                currency=original["currency"],
-                asset_type=original["asset_type"],
-                stablecoin_symbol=original.get("stablecoin_symbol"),
-                network=original.get("network"),
-                destination_address=original.get("destination_address"),
-                vendor_url_or_name=original["vendor_url_or_name"],
-                item_description=original["item_description"],
-                quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
-                policy_result=pending.verdict_snapshot.get("policy_result", {}),
-                semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
-                verdict="MALICIOUS",
-                status="DENIED_BY_HUMAN",
-            )
-        session.add(audit)
+        session.add(SpendAuditLog(
+            request_id=request_id,
+            agent_id=original["agent_id"],
+            declared_goal=original["declared_goal"],
+            amount_cents=original["amount_cents"],
+            currency=original["currency"],
+            asset_type=original["asset_type"],
+            stablecoin_symbol=original.get("stablecoin_symbol"),
+            network=original.get("network"),
+            destination_address=original.get("destination_address"),
+            vendor_url_or_name=original["vendor_url_or_name"],
+            item_description=original["item_description"],
+            quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
+            policy_result=pending.verdict_snapshot.get("policy_result", {}),
+            semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
+            verdict="MALICIOUS",
+            status="DENIED_BY_HUMAN",
+        ))
         append_agent_activity(
             session,
             agent_id=original["agent_id"],

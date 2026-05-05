@@ -48,10 +48,13 @@ async def bootstrap_onboarding(payload: OnboardingBootstrapRequest, session: Ses
     session.commit()
 
     quickstart_curl = (
-        "curl -X POST http://127.0.0.1:8000/v1/spend-request "
-        f"-H 'x-agent-key: local-dev-key' -H 'x-agent-id: {agent_id}' "
-        "-H 'Content-Type: application/json' "
-        f"-d '{{\"agent_id\":\"{agent_id}\",\"declared_goal\":\"Book travel\","
+        "# Sign your request — see the Integration tab in the dashboard for the full signing helper.\n"
+        "# curl -X POST http://127.0.0.1:8000/v1/spend-request \\\n"
+        "#   -H 'x-agent-id: <agent_id>' \\\n"
+        "#   -H 'x-timestamp: <ISO8601>' \\\n"
+        "#   -H 'x-signature: sha256=<hmac>' \\\n"
+        "#   -H 'Content-Type: application/json' \\\n"
+        f"#   -d '{{\"agent_id\":\"{agent_id}\",\"declared_goal\":\"Book travel\","
         "\"amount_cents\":4900,\"currency\":\"USD\",\"vendor_url_or_name\":\"Delta Airlines\","
         "\"item_description\":\"Flight booking\",\"asset_type\":\"STABLECOIN\","
         "\"stablecoin_symbol\":\"USDC\",\"network\":\"base\","

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
         default="redis://localhost:6379/0",
         validation_alias=AliasChoices("REDIS_DSN", "REDIS_URL"),
     )
-    slm_model_name: str = Field(default="llama3:8b")
+    anthropic_model_name: str = Field(default="claude-haiku-4-5-20251001")
     hitl_default_timeout_seconds: int = Field(default=600)
     loop_window_seconds: int = Field(default=60)
     loop_threshold: int = Field(default=5)
@@ -32,9 +32,6 @@ class Settings(BaseSettings):
     auth0_domain: str = Field(default="")
     auth0_audience: str = Field(default="")
     auth0_issuer: str = Field(default="")
-    dev_user_token: str = Field(default="dev-user-token")
-    dev_user_sub: str = Field(default="dev-user-001")
-    dev_user_email: str = Field(default="dev-user@example.com")
 
     @field_validator("postgres_dsn", mode="before")
     @classmethod

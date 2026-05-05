@@ -8,6 +8,7 @@ dashboard/node_modules/
 dashboard/dist/
 
 ARCHITECTURE.md
+CLAUDE.md
 
 .claude/
 .vite/

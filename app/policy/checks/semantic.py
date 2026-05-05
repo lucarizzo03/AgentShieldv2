@@ -1,9 +1,9 @@
 from app.policy.verdicts import CheckResult
-from app.services.slm.client import LocalSlmClient
+from app.services.slm.client import AnthropicSemanticClient
 
 
 async def run_semantic_checks(
-    slm_client: LocalSlmClient,
+    semantic_client: AnthropicSemanticClient,
     declared_goal: str,
     amount_cents: int,
     vendor_url_or_name: str,
@@ -11,16 +11,16 @@ async def run_semantic_checks(
     stablecoin_symbol: str | None,
     network: str | None,
     destination_address: str | None,
-    dev_slm_preset: str | None = None,
+    dev_preset: str | None = None,
 ) -> CheckResult:
-    if dev_slm_preset is not None:
+    if dev_preset is not None:
         result = {
-            "alignment_label": dev_slm_preset.upper(),
-            "risk_score": 10 if dev_slm_preset == "ALIGNED" else 55 if dev_slm_preset == "WEAK" else 85,
+            "alignment_label": dev_preset.upper(),
+            "risk_score": 10 if dev_preset == "ALIGNED" else 55 if dev_preset == "WEAK" else 85,
             "reason_codes": ["DEV_PRESET"],
         }
     else:
-        result = await slm_client.semantic_alignment(
+        result = await semantic_client.semantic_alignment(
             declared_goal=declared_goal,
             amount_cents=amount_cents,
             vendor_url_or_name=vendor_url_or_name,
@@ -35,8 +35,6 @@ async def run_semantic_checks(
     alignment_label = str(raw_label).upper() if raw_label is not None else "WEAK"
     reason_codes = list(result.get("reason_codes", []))
 
-    # Raw score >= 85 is treated as MISMATCH regardless of label.
-    # Pin stored score to a consistent display range per label.
     if raw_score >= 85 or alignment_label not in ("ALIGNED", "WEAK"):
         alignment_label = "MISMATCH"
         risk_score = 85
@@ -60,4 +58,3 @@ async def run_semantic_checks(
         "reason_codes": reason_codes,
     }
     return check
-

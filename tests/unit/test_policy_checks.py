@@ -2,7 +2,6 @@ import pytest
 
 from app.models.agent import Agent
 from app.policy.checks.policy_db import run_policy_checks
-from app.services.payment.stablecoin_policy import validate_stablecoin_policy
 
 
 def _agent() -> Agent:
@@ -33,8 +32,10 @@ def test_policy_vendor_blocklist_hard_deny() -> None:
 
 def test_stablecoin_destination_not_allowlisted_is_suspicious() -> None:
     agent = _agent()
-    result = validate_stablecoin_policy(
+    result = run_policy_checks(
         agent=agent,
+        amount_cents=500,
+        vendor_url_or_name="legit.com",
         asset_type="STABLECOIN",
         stablecoin_symbol="USDC",
         network="base",
@@ -47,12 +48,13 @@ def test_stablecoin_destination_not_allowlisted_is_suspicious() -> None:
 @pytest.mark.parametrize("symbol,network", [("USDT", "base"), ("USDC", "ethereum")])
 def test_stablecoin_chain_token_policy_hard_deny(symbol: str, network: str) -> None:
     agent = _agent()
-    result = validate_stablecoin_policy(
+    result = run_policy_checks(
         agent=agent,
+        amount_cents=500,
+        vendor_url_or_name="legit.com",
         asset_type="STABLECOIN",
         stablecoin_symbol=symbol,
         network=network,
         destination_address="0xabc1234567890000",
     )
     assert result.hard_deny is True
-

@@ -8,7 +8,7 @@ def test_spend_request_contract_fields() -> None:
         declared_goal="Launch product website",
         amount_cents=2500,
         currency="USD",
-        vendor_url_or_name="tempo",
+        vendor_url_or_name="tempo.com",
         item_description="Stablecoin payment for service",
         asset_type="STABLECOIN",
         stablecoin_symbol="USDC",
@@ -26,4 +26,3 @@ def test_hitl_resolve_contract_fields() -> None:
     data = payload.model_dump()
     assert data["decision"] == "APPROVE"
     assert data["channel"] == "dashboard"
-

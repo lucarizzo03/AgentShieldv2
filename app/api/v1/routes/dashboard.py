@@ -73,11 +73,29 @@ async def list_dashboard_notifications(
             n.updated_at = now
             session.add(n)
             audit = session.exec(
-                select(SpendAuditLog).where(SpendAuditLog.request_id == n.request_id)
+                select(SpendAuditLog)
+                .where(SpendAuditLog.request_id == n.request_id)
+                .order_by(SpendAuditLog.created_at.desc())
             ).first()
             if audit and audit.status == "PENDING_HITL":
-                audit.status = "EXPIRED"
-                session.add(audit)
+                session.add(SpendAuditLog(
+                    request_id=audit.request_id,
+                    agent_id=audit.agent_id,
+                    declared_goal=audit.declared_goal,
+                    amount_cents=audit.amount_cents,
+                    currency=audit.currency,
+                    asset_type=audit.asset_type,
+                    stablecoin_symbol=audit.stablecoin_symbol,
+                    network=audit.network,
+                    destination_address=audit.destination_address,
+                    vendor_url_or_name=audit.vendor_url_or_name,
+                    item_description=audit.item_description,
+                    quantitative_result=audit.quantitative_result,
+                    policy_result=audit.policy_result,
+                    semantic_result=audit.semantic_result,
+                    verdict=audit.verdict,
+                    status="EXPIRED",
+                ))
             pending = session.exec(
                 select(PendingSpend).where(PendingSpend.request_id == n.request_id)
             ).first()
@@ -139,12 +157,17 @@ async def list_agent_activity(
     user = None if auth_context.agent_id else get_or_create_user(session, auth_context)
     _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
 
-    rows = session.exec(
+    raw_rows = session.exec(
         select(SpendAuditLog)
         .where(SpendAuditLog.agent_id == agent_id)
         .order_by(SpendAuditLog.created_at.desc())
-        .limit(limit)
+        .limit(limit * 2)
     ).all()
+    _seen: dict[str, SpendAuditLog] = {}
+    for r in raw_rows:
+        if r.request_id not in _seen or r.created_at > _seen[r.request_id].created_at:
+            _seen[r.request_id] = r
+    rows = sorted(_seen.values(), key=lambda r: r.created_at, reverse=True)[:limit]
     return {
         "agent_id": agent_id,
         "activity": [
@@ -189,12 +212,18 @@ async def get_dashboard_stats(
         .where(SpendAuditLog.created_at >= day_start)
     ).all()
 
-    blocked = len([r for r in today_rows if r.status in {"BLOCKED", "DENIED_BY_HUMAN"}])
-    approved = len([r for r in today_rows if r.status in {"APPROVED_EXECUTED", "APPROVED_BY_HUMAN_EXECUTED"}])
-    pending_approval = len([r for r in today_rows if r.status == "PENDING_HITL"])
+    latest: dict[str, SpendAuditLog] = {}
+    for r in today_rows:
+        if r.request_id not in latest or r.created_at > latest[r.request_id].created_at:
+            latest[r.request_id] = r
+    unique = list(latest.values())
+
+    blocked = len([r for r in unique if r.status in {"BLOCKED", "DENIED_BY_HUMAN"}])
+    approved = len([r for r in unique if r.status in {"APPROVED_EXECUTED", "APPROVED_BY_HUMAN_EXECUTED"}])
+    pending_approval = len([r for r in unique if r.status == "PENDING_HITL"])
     return {
         "agent_id": agent_id,
-        "total_transactions_today": len(today_rows),
+        "total_transactions_today": len(unique),
         "blocked": blocked,
         "pending_approval": pending_approval,
         "auto_approved": approved,
