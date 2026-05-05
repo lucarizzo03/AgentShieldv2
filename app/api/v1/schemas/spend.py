@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
@@ -32,24 +31,12 @@ class SpendRequest(BaseModel):
         return self
 
 
-class PaymentExecutionResult(BaseModel):
-    provider: str
-    provider_txn_id: str
-    asset_type: Literal["STABLECOIN", "FIAT"]
-    stablecoin_symbol: str | None = None
-    network: str | None = None
-    destination_address: str | None = None
-    onchain_tx_hash: str | None = None
-    executed_at: datetime
-
-
 class SpendApprovedResponse(BaseModel):
     request_id: str
     status: Literal["APPROVED_EXECUTED"]
     verdict: Literal["SAFE"]
     approved_amount_cents: int
     currency: str
-    payment: PaymentExecutionResult
     reasons: list[str]
 
 
