@@ -30,6 +30,7 @@ import {
   getOnboardingChecklist,
   listAgents,
   resolveRequest,
+  runDevTestRequest,
   startPhoneVerification,
   submitSpendRequest,
   updateHitlPreferences,
@@ -422,7 +423,7 @@ export default function App() {
     if (!activeAgentId || safeRunning) return;
     setSafeRunning(true);
     toast("Running SAFE test…");
-    submitSpendRequest(activeAgentId, {
+    runDevTestRequest(activeAgentId, {
       agent_id: activeAgentId,
       declared_goal: "Book flight to NYC conference",
       amount_cents: 100,
@@ -446,7 +447,7 @@ export default function App() {
     if (!activeAgentId || hitlRunning) return;
     setHitlRunning(true);
     toast("Running HITL test…");
-    submitSpendRequest(activeAgentId, {
+    runDevTestRequest(activeAgentId, {
       agent_id: activeAgentId,
       declared_goal: "Book flight to NYC conference",
       amount_cents: 500,

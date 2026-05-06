@@ -86,6 +86,17 @@ export async function submitSpendRequest(agentId, payload) {
   });
 }
 
+// Used by dashboard mock test buttons — authenticates with the operator's
+// Bearer token so no HMAC signing is required.
+export async function runDevTestRequest(agentId, payload) {
+  return request("/spend-request", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-agent-id": agentId },
+    body: JSON.stringify(payload),
+    authMode: "user",
+  });
+}
+
 export async function bootstrapOnboarding(payload) {
   return request("/onboarding/bootstrap", {
     method: "POST",
