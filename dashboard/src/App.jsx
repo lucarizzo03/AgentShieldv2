@@ -423,17 +423,18 @@ export default function App() {
     if (!activeAgentId || safeRunning) return;
     setSafeRunning(true);
     toast("Running SAFE test…");
+    const safeAddr = "0x" + crypto.getRandomValues(new Uint8Array(20)).reduce((s, b) => s + b.toString(16).padStart(2, "0"), "");
     runDevTestRequest(activeAgentId, {
       agent_id: activeAgentId,
-      declared_goal: "Book flight to NYC conference",
+      declared_goal: "Pay contractor invoice for design work",
       amount_cents: 100,
       currency: "USD",
-      vendor_url_or_name: "Delta Airlines",
-      item_description: "Economy seat JFK-LAX",
+      vendor_url_or_name: "contractor.eth",
+      item_description: "Logo design invoice #12",
       asset_type: "STABLECOIN",
       stablecoin_symbol: "USDC",
       network: "base",
-      destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
+      destination_address: safeAddr,
       idempotency_key: `quick-safe-${Date.now()}`,
       dev_preset: "ALIGNED",
     })
@@ -447,6 +448,7 @@ export default function App() {
     if (!activeAgentId || hitlRunning) return;
     setHitlRunning(true);
     toast("Running HITL test…");
+    const hitlAddr = "0x" + crypto.getRandomValues(new Uint8Array(20)).reduce((s, b) => s + b.toString(16).padStart(2, "0"), "");
     runDevTestRequest(activeAgentId, {
       agent_id: activeAgentId,
       declared_goal: "Book flight to NYC conference",
@@ -457,7 +459,7 @@ export default function App() {
       asset_type: "STABLECOIN",
       stablecoin_symbol: "USDC",
       network: "base",
-      destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
+      destination_address: hitlAddr,
       idempotency_key: `quick-suspicious-${Date.now()}`,
       dev_preset: "WEAK",
     })
