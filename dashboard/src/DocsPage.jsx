@@ -152,34 +152,47 @@ function VerdictBadge({ verdict }) {
 export default function DocsPage({ agentId, activeHmac, secretReveal, setSecretReveal, apiBase }) {
   const [activeSection, setActiveSection] = useState("overview");
   const mainRef = useRef(null);
+  const programmaticScroll = useRef(false);
+  const scrollTimer = useRef(null);
 
   const hmacDisplay = secretReveal && activeHmac ? activeHmac : "sk_live_••••••••••••••••";
 
-  useEffect(() => {
-    const el = document.getElementById(activeSection);
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [activeSection]);
+  function scrollToSection(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    setActiveSection(id);
+    programmaticScroll.current = true;
+    clearTimeout(scrollTimer.current);
+    el.scrollIntoView({ behavior: "smooth", block: "start" });
+    // smooth scroll takes ~600ms; suppress observer updates until it settles
+    scrollTimer.current = setTimeout(() => {
+      programmaticScroll.current = false;
+    }, 700);
+  }
 
   useEffect(() => {
     const container = mainRef.current;
     if (!container) return;
     const observer = new IntersectionObserver(
       (entries) => {
+        if (programmaticScroll.current) return;
         const visible = entries.filter((e) => e.isIntersecting);
-        if (visible.length > 0) {
-          const topmost = visible.reduce((a, b) =>
-            a.boundingClientRect.top < b.boundingClientRect.top ? a : b
-          );
-          setActiveSection(topmost.target.id);
-        }
+        if (visible.length === 0) return;
+        const topmost = visible.reduce((a, b) =>
+          a.boundingClientRect.top < b.boundingClientRect.top ? a : b
+        );
+        setActiveSection(topmost.target.id);
       },
-      { root: container, rootMargin: "-20% 0px -70% 0px", threshold: 0 }
+      { root: container, rootMargin: "-10% 0px -65% 0px", threshold: 0 }
     );
     SECTIONS.flatMap((g) => g.items).forEach(({ id }) => {
       const el = document.getElementById(id);
       if (el) observer.observe(el);
     });
-    return () => observer.disconnect();
+    return () => {
+      observer.disconnect();
+      clearTimeout(scrollTimer.current);
+    };
   }, []);
 
   const codeProps = { agentId, hmacSecret: hmacDisplay, apiBase };
@@ -202,7 +215,7 @@ export default function DocsPage({ agentId, activeHmac, secretReveal, setSecretR
               return (
                 <button
                   key={item.id}
-                  onClick={() => setActiveSection(item.id)}
+                  onClick={() => scrollToSection(item.id)}
                   style={{
                     display: "block", width: "100%", textAlign: "left",
                     padding: "5px 8px", borderRadius: 4, border: "none",
