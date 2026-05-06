@@ -23,7 +23,8 @@ async function request(path, options = {}) {
     let message = `Request failed: ${response.status}`;
     try {
       const data = await response.json();
-      message = data.detail || message;
+      const detail = data.detail;
+      message = typeof detail === "string" ? detail : Array.isArray(detail) ? detail.map((e) => e.msg || JSON.stringify(e)).join("; ") : message;
     } catch {
       // noop
     }
