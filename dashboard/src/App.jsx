@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import DocsPage from "./DocsPage";
 import {
   Activity,
   AlertTriangle,
@@ -66,7 +67,7 @@ const nav = [
   { key: "overview", label: "Overview", icon: Home },
   { key: "activity", label: "Activity", icon: Activity },
   { key: "approvals", label: "Approvals", icon: AlertTriangle, pending: true },
-  { key: "integration", label: "Integration", icon: ArrowUpRight },
+  { key: "docs", label: "Docs", icon: ArrowUpRight },
   { key: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -611,7 +612,7 @@ print(response.status_code, response.text)`;
         </div>
       </aside>
 
-      <main style={{ flex: 1, overflowY: "auto", background: "var(--bg)" }}>
+      <main style={{ flex: 1, overflowY: page === "docs" ? "hidden" : "auto", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
         <header style={{ height: 48, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px" }}>
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text-1)" }}>{pageTitle}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -651,52 +652,19 @@ print(response.status_code, response.text)`;
           </div>
         </header>
 
-        <section style={{ padding: 24 }}>
-          {page === "integration" ? (
-            <div style={{ maxWidth: 900 }}>
-              <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
-                <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)", marginBottom: 8 }}>
-                  Agent Integration (Primary)
-                </div>
-                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>
-                  Agents should call `POST /v1/spend-request` directly from their workflow. This is the production path.
-                </div>
-                <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
-                  endpoint: {apiBase}/spend-request
-                </div>
-                <div style={{ marginTop: 6, fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
-                  agent_id: {effectiveAgentId}
-                </div>
-              </div>
+        {page === "docs" ? (
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <DocsPage
+              agentId={effectiveAgentId}
+              activeHmac={activeHmac}
+              secretReveal={secretReveal}
+              setSecretReveal={setSecretReveal}
+              apiBase={apiBase}
+            />
+          </div>
+        ) : null}
 
-              <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
-                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>Signing Rules</div>
-                <div style={{ fontSize: 11, color: "var(--text-1)", fontFamily: "var(--font-mono)", marginBottom: 8 }}>
-                  canonical = METHOD + "\n" + PATH + "\n" + x-timestamp + "\n" + sha256(body) + "\n" + x-agent-id
-                </div>
-                <div style={{ fontSize: 11, color: "var(--text-3)" }}>
-                  Send `x-agent-id`, `x-timestamp`, and `x-signature` (HMAC-SHA256). In local dev, you can still use `x-agent-key: local-dev-key`.
-                </div>
-              </div>
-
-              <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <div style={{ fontSize: 12, color: "var(--text-2)" }}>Generated Python Snippet</div>
-                  <button
-                    onClick={() => navigator.clipboard.writeText(integrationPython)}
-                    disabled={!secretReveal}
-                    title={!secretReveal ? "Reveal your HMAC secret first" : "Copy snippet"}
-                    style={{ border: "none", background: "transparent", color: secretReveal ? "var(--text-2)" : "var(--text-3)", fontSize: 11, cursor: secretReveal ? "pointer" : "not-allowed" }}
-                  >
-                    {secretReveal ? "[copy]" : "[reveal secret to copy]"}
-                  </button>
-                </div>
-                <pre style={{ margin: 0, fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-1)", whiteSpace: "pre-wrap" }}>
-                  {integrationPython}
-                </pre>
-              </div>
-            </div>
-          ) : null}
+        <section style={{ padding: 24, display: page === "docs" ? "none" : undefined }}>
 
 
           {page === "overview" ? (
