@@ -435,7 +435,7 @@ export default function App() {
       network: "base",
       destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
       idempotency_key: `quick-safe-${Date.now()}`,
-      dev_slm_preset: "ALIGNED",
+      dev_preset: "ALIGNED",
     })
       .then(() => Promise.all([refresh(activeAgentId, true), refreshChecklist(activeAgentId)]))
       .then(() => toast("✓ SAFE test complete"))
@@ -459,7 +459,7 @@ export default function App() {
       network: "base",
       destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
       idempotency_key: `quick-suspicious-${Date.now()}`,
-      dev_slm_preset: "WEAK",
+      dev_preset: "WEAK",
     })
       .then(() => Promise.all([refresh(activeAgentId, true), refreshChecklist(activeAgentId)]))
       .then(() => {
