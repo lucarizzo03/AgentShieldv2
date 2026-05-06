@@ -8,6 +8,17 @@ from app.db.redis import seconds_until_next_utc_midnight
 from app.models.agent import Agent
 from app.policy.verdicts import CheckResult
 
+# Atomically INCR and set TTL only on first creation, avoiding the
+# INCR-then-conditional-EXPIRE race where concurrent requests both
+# skip count==1 and leave keys with no TTL.
+_INCR_WITH_TTL = """
+local count = redis.call('INCR', KEYS[1])
+if count == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return count
+"""
+
 
 def transaction_fingerprint(
     vendor: str,
@@ -66,9 +77,7 @@ async def run_quantitative_checks(
     destination_burst = 0
 
     if not budget_exceeded:
-        loop_count = await redis.incr(loop_key)
-        if loop_count == 1:
-            await redis.expire(loop_key, settings.loop_window_seconds)
+        loop_count = await redis.eval(_INCR_WITH_TTL, 1, loop_key, settings.loop_window_seconds)
         if loop_count >= settings.loop_threshold:
             check.suspicious = True
             check.reasons.append("LOOP_PATTERN_DETECTED")
@@ -76,9 +85,7 @@ async def run_quantitative_checks(
             check.reasons.append("NO_LOOP_PATTERN")
 
         if burst_key:
-            destination_burst = await redis.incr(burst_key)
-            if destination_burst == 1:
-                await redis.expire(burst_key, settings.loop_window_seconds)
+            destination_burst = await redis.eval(_INCR_WITH_TTL, 1, burst_key, settings.loop_window_seconds)
             if destination_burst >= settings.loop_threshold:
                 check.suspicious = True
                 check.reasons.append("DESTINATION_BURST_DETECTED")

@@ -1,10 +1,13 @@
 import hashlib
 import hmac as _hmac
+import ipaddress
 import logging
+import socket
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
 from redis.asyncio import Redis
 from sqlmodel import Session, select
@@ -15,7 +18,7 @@ from app.api.v1.schemas.hitl import HitlResolveRequest
 from app.api.v1.schemas.spend import SpendRequest
 from app.core.config import get_settings
 from app.core.metrics import increment
-from app.core.security import verify_hitl_webhook_signature
+from app.core.security import verify_hitl_auth
 from app.db.postgres import get_session
 from app.db.redis import get_redis
 from app.models.dashboard_notification import DashboardNotification
@@ -66,6 +69,33 @@ def _email_error_page(message: str) -> str:
   </div>
 </body>
 </html>"""
+
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("100.64.0.0/10"),
+]
+
+
+def _is_ssrf_blocked(url: str) -> bool:
+    try:
+        hostname = urlparse(url).hostname
+        if not hostname:
+            return True
+        for _family, _type, _proto, _canonname, sockaddr in socket.getaddrinfo(hostname, None):
+            ip = ipaddress.ip_address(sockaddr[0])
+            if any(ip in net for net in _BLOCKED_NETWORKS):
+                return True
+        return False
+    except Exception:
+        return True
+
 
 router = APIRouter(tags=["hitl"])
 
@@ -157,28 +187,38 @@ async def _resolve_pending(
     session.commit()
 
     if payload.decision == "APPROVE":
-        await commit_budget_spend(
-            redis=redis,
-            agent_id=original.agent_id,
-            asset_type=original.asset_type,
-            amount_cents=original.amount_cents,
-        )
+        try:
+            await commit_budget_spend(
+                redis=redis,
+                agent_id=original.agent_id,
+                asset_type=original.asset_type,
+                amount_cents=original.amount_cents,
+            )
+        except Exception:
+            logger.critical(
+                "Budget commit failed after HITL approval — manual recovery required",
+                extra={"agent_id": original.agent_id, "amount_cents": original.amount_cents, "request_id": request_id},
+                exc_info=True,
+            )
 
     callback_url = pending.payload_json.get("agent_callback_url")
     if callback_url:
-        callback_body = {
-            "request_id": request_id,
-            "decision": payload.decision,
-            "status": "APPROVED_BY_HUMAN_EXECUTED" if payload.decision == "APPROVE" else "DENIED_BY_HUMAN",
-            "verdict": "SAFE" if payload.decision == "APPROVE" else "MALICIOUS",
-            "resolved_at": pending.resolved_at.isoformat() if pending.resolved_at else None,
-        }
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.post(callback_url, json=callback_body, timeout=10)
-            logger.info("HITL callback delivered", extra={"request_id": request_id, "url": callback_url})
-        except Exception as exc:
-            logger.warning("HITL callback failed", extra={"request_id": request_id, "url": callback_url, "error": str(exc)})
+        if _is_ssrf_blocked(callback_url):
+            logger.warning("HITL callback blocked (SSRF)", extra={"request_id": request_id, "url": callback_url})
+        else:
+            callback_body = {
+                "request_id": request_id,
+                "decision": payload.decision,
+                "status": "APPROVED_BY_HUMAN_EXECUTED" if payload.decision == "APPROVE" else "DENIED_BY_HUMAN",
+                "verdict": "SAFE" if payload.decision == "APPROVE" else "MALICIOUS",
+                "resolved_at": pending.resolved_at.isoformat() if pending.resolved_at else None,
+            }
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.post(callback_url, json=callback_body, timeout=10)
+                logger.info("HITL callback delivered", extra={"request_id": request_id, "url": callback_url})
+            except Exception as exc:
+                logger.warning("HITL callback failed", extra={"request_id": request_id, "url": callback_url, "error": str(exc)})
 
     return {
         "request_id": request_id,
@@ -192,7 +232,7 @@ async def _resolve_pending(
 async def resolve_hitl_request(
     request_id: str,
     payload: HitlResolveRequest,
-    _: None = Depends(verify_hitl_webhook_signature),
+    _: None = Depends(verify_hitl_auth),
     session: Session = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):

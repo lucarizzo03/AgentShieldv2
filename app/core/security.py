@@ -208,3 +208,40 @@ async def verify_hitl_webhook_signature(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid webhook signature",
         )
+
+
+async def verify_hitl_auth(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_webhook_signature: str | None = Header(default=None),
+    x_webhook_timestamp: str | None = Header(default=None),
+) -> None:
+    """Accept either Auth0 Bearer (dashboard operators) or webhook HMAC (external integrations)."""
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        _verify_auth0_bearer(token)
+        return
+
+    if x_webhook_signature and x_webhook_timestamp:
+        settings = get_settings()
+        _validate_timestamp(x_webhook_timestamp, settings.signature_tolerance_seconds)
+        body_hash = _body_sha256(await request.body())
+        canonical_message = "\n".join(
+            [
+                request.method.upper(),
+                request.url.path,
+                x_webhook_timestamp,
+                body_hash,
+            ]
+        )
+        if not _verify_hmac(settings.webhook_hmac_secret, canonical_message, x_webhook_signature):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid webhook signature",
+            )
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Provide an Auth0 Bearer token or webhook HMAC signature headers (x-webhook-signature + x-webhook-timestamp)",
+    )

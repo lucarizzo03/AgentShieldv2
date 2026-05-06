@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -22,6 +23,7 @@ from app.services.hitl.notifier import HitlNotifier
 from app.services.idempotency import cache_idempotent_response, read_cached_idempotent_response
 from app.services.slm.client import AnthropicSemanticClient
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["spend"])
 
 _HIGH_RISK_REASONS = {
@@ -124,7 +126,14 @@ async def spend_request(
             },
         )
         session.commit()
-        await commit_budget_spend(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
+        try:
+            await commit_budget_spend(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
+        except Exception:
+            logger.critical(
+                "Budget commit failed after payment execution — manual recovery required",
+                extra={"agent_id": payload.agent_id, "amount_cents": payload.amount_cents, "request_id": request_id},
+                exc_info=True,
+            )
         body = {
             "request_id": request_id,
             "status": "APPROVED_EXECUTED",
