@@ -16,7 +16,12 @@ from app.models.agent import Agent
 from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
-from app.policy.checks.quantitative import commit_budget_spend, transaction_fingerprint
+from app.policy.checks.quantitative import (
+    commit_budget_spend,
+    finalize_budget_reservation,
+    rollback_budget_reservation,
+    transaction_fingerprint,
+)
 from app.policy.engine import run_financial_triangulation
 from app.services.activity_log import append_agent_activity
 from app.services.hitl.notifier import HitlNotifier
@@ -127,7 +132,12 @@ async def spend_request(
         )
         session.commit()
         try:
-            await commit_budget_spend(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
+            if tri.quantitative_result.get("budget_reserved", False):
+                # Reservation was made atomically during the budget check — just refresh TTL.
+                await finalize_budget_reservation(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
+            else:
+                # dev_preset path: quantitative check was skipped, commit budget normally.
+                await commit_budget_spend(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
         except Exception:
             logger.critical(
                 "Budget commit failed after payment execution — manual recovery required",
@@ -179,6 +189,15 @@ async def spend_request(
             },
         )
         session.commit()
+        if tri.quantitative_result.get("budget_reserved", False):
+            try:
+                await rollback_budget_reservation(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
+            except Exception:
+                logger.error(
+                    "Budget rollback failed after MALICIOUS verdict",
+                    extra={"agent_id": payload.agent_id, "amount_cents": payload.amount_cents, "request_id": request_id},
+                    exc_info=True,
+                )
         body = {
             "request_id": request_id,
             "status": "BLOCKED",
@@ -273,6 +292,15 @@ async def spend_request(
         },
     )
     session.commit()
+    if tri.quantitative_result.get("budget_reserved", False):
+        try:
+            await rollback_budget_reservation(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
+        except Exception:
+            logger.error(
+                "Budget rollback failed after SUSPICIOUS verdict",
+                extra={"agent_id": payload.agent_id, "amount_cents": payload.amount_cents, "request_id": request_id},
+                exc_info=True,
+            )
     await HitlNotifier().send_notification(agent=agent, pending=pending)
 
     body = {

@@ -19,6 +19,28 @@ end
 return count
 """
 
+# Atomically checks the daily budget limit and reserves (increments) the
+# amount only if the projected total stays within the limit.  This closes
+# the TOCTOU race where two concurrent requests both pass a non-atomic
+# GET → compare → INCRBY sequence.
+#
+# Returns a 3-element array: {reserved, current_before, projected}
+#   reserved == 1  → within budget, amount has been incremented (reserved)
+#   reserved == 0  → over budget, Redis state is unchanged
+_CHECK_AND_RESERVE_BUDGET = """
+local current = tonumber(redis.call('GET', KEYS[1])) or 0
+local projected = current + tonumber(ARGV[1])
+if projected > tonumber(ARGV[2]) then
+    return {0, current, projected}
+end
+redis.call('INCRBY', KEYS[1], ARGV[1])
+local ttl = redis.call('TTL', KEYS[1])
+if ttl == -1 or ttl == -2 then
+    redis.call('EXPIRE', KEYS[1], ARGV[3])
+end
+return {1, current, projected}
+"""
+
 
 def transaction_fingerprint(
     vendor: str,
@@ -64,9 +86,15 @@ async def run_quantitative_checks(
         else None
     )
 
-    current_spent = int(await redis.get(budget_key) or 0)
-    projected = current_spent + amount_cents
-    budget_exceeded = projected > agent.daily_budget_limit_cents
+    ttl = seconds_until_next_utc_midnight()
+    result = await redis.eval(
+        _CHECK_AND_RESERVE_BUDGET, 1, budget_key,
+        amount_cents, agent.daily_budget_limit_cents, ttl,
+    )
+    reserved = bool(int(result[0]))
+    current_spent = int(result[1])
+    projected = int(result[2])
+    budget_exceeded = not reserved
     if budget_exceeded:
         check.hard_deny = True
         check.reasons.append("BUDGET_DAILY_LIMIT_EXCEEDED")
@@ -94,6 +122,7 @@ async def run_quantitative_checks(
         "daily_spent_usd": round(current_spent / 100, 2),
         "projected_spent_usd": round(projected / 100, 2),
         "budget_exceeded": budget_exceeded,
+        "budget_reserved": reserved,
         "loop_count": int(loop_count),
         "destination_burst_count": int(destination_burst),
     }
@@ -101,10 +130,30 @@ async def run_quantitative_checks(
 
 
 async def commit_budget_spend(redis: Redis, agent_id: str, asset_type: str, amount_cents: int) -> None:
+    """Full budget commit (INCRBY + TTL).  Used by the HITL APPROVE path where
+    the earlier tentative reservation was rolled back before the human decision."""
     date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     budget_key = f"budget:daily:{agent_id}:{asset_type}:{date_key}"
     async with redis.pipeline() as pipe:
         pipe.incrby(budget_key, amount_cents)
         pipe.expire(budget_key, seconds_until_next_utc_midnight())
         await pipe.execute()
+
+
+async def finalize_budget_reservation(redis: Redis, agent_id: str, asset_type: str, amount_cents: int) -> None:
+    """Finalizes a tentative reservation made during the budget check by refreshing
+    the TTL.  The INCRBY already happened atomically in _CHECK_AND_RESERVE_BUDGET,
+    so this only needs to keep the key alive until midnight."""
+    date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    budget_key = f"budget:daily:{agent_id}:{asset_type}:{date_key}"
+    await redis.expire(budget_key, seconds_until_next_utc_midnight())
+
+
+async def rollback_budget_reservation(redis: Redis, agent_id: str, asset_type: str, amount_cents: int) -> None:
+    """Rolls back the tentative budget reservation when a spend is denied
+    (MALICIOUS verdict) or put on hold (SUSPICIOUS / HITL).  For HITL, the
+    amount is re-committed via commit_budget_spend only after human approval."""
+    date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    budget_key = f"budget:daily:{agent_id}:{asset_type}:{date_key}"
+    await redis.decrby(budget_key, amount_cents)
 

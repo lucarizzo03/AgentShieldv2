@@ -66,9 +66,42 @@ class FakeRedis:
         return self._counter[key]
 
     async def incrby(self, key, amount):
-        self._counter[key] += amount
-        self._values[key] = str(self._counter[key])
-        return self._counter[key]
+        current = int(self._values.get(key, 0))
+        new_val = current + int(amount)
+        self._counter[key] = new_val
+        self._values[key] = str(new_val)
+        return new_val
+
+    async def decrby(self, key, amount):
+        current = int(self._values.get(key, 0))
+        new_val = current - int(amount)
+        self._counter[key] = new_val
+        self._values[key] = str(new_val)
+        return new_val
+
+    async def eval(self, script, numkeys, *args):
+        keys = list(args[:numkeys])
+        argv = list(args[numkeys:])
+        key = keys[0]
+        if len(argv) == 3:
+            # _CHECK_AND_RESERVE_BUDGET: argv = [amount_cents, limit_cents, ttl_seconds]
+            amount = int(argv[0])
+            limit = int(argv[1])
+            current = int(self._values.get(key, 0))
+            projected = current + amount
+            if projected > limit:
+                return [0, current, projected]
+            new_val = current + amount
+            self._counter[key] = new_val
+            self._values[key] = str(new_val)
+            return [1, current, projected]
+        else:
+            # _INCR_WITH_TTL: argv = [ttl_seconds]
+            current = int(self._values.get(key, 0))
+            new_val = current + 1
+            self._counter[key] = new_val
+            self._values[key] = str(new_val)
+            return new_val
 
     async def expire(self, key, ttl):
         return True

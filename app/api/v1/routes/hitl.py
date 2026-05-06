@@ -107,7 +107,9 @@ async def _resolve_pending(
     session: Session,
     redis: Redis,
 ):
-    pending = session.exec(select(PendingSpend).where(PendingSpend.request_id == request_id)).first()
+    pending = session.exec(
+        select(PendingSpend).where(PendingSpend.request_id == request_id).with_for_update()
+    ).first()
     if not pending:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending request not found")
 
