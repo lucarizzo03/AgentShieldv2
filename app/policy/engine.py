@@ -6,6 +6,9 @@ from app.policy.verdicts import TriangulationResult
 from app.services.slm.client import AnthropicSemanticClient
 
 
+_DEV_PRESET_VERDICT = {"ALIGNED": "SAFE", "WEAK": "SUSPICIOUS", "MISMATCH": "MALICIOUS"}
+
+
 async def run_financial_triangulation(
     *,
     redis,
@@ -22,6 +25,16 @@ async def run_financial_triangulation(
     fingerprint: str,
     dev_preset: str | None = None,
 ) -> TriangulationResult:
+    if dev_preset and dev_preset.upper() in _DEV_PRESET_VERDICT:
+        verdict = _DEV_PRESET_VERDICT[dev_preset.upper()]
+        return TriangulationResult(
+            verdict=verdict,
+            reasons=["DEV_PRESET"],
+            quantitative_result={"dev_preset": dev_preset},
+            policy_result={"dev_preset": dev_preset},
+            semantic_result={"alignment_label": dev_preset.upper(), "risk_score": 10 if verdict == "SAFE" else 55 if verdict == "SUSPICIOUS" else 85, "reason_codes": ["DEV_PRESET"]},
+        )
+
     quantitative = await run_quantitative_checks(
         redis=redis,
         agent=agent,
