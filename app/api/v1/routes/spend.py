@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from redis.asyncio import Redis
 from sqlmodel import Session, select
 
@@ -88,7 +88,7 @@ async def spend_request(
         network=payload.network,
         destination_address=payload.destination_address,
         fingerprint=fingerprint,
-        dev_preset=payload.dev_preset if settings.app_env == "dev" else None,
+        dev_preset=payload.dev_preset if (settings.app_env == "dev" or auth_context.method == "auth0") else None,
     )
 
     now = datetime.now(timezone.utc)
