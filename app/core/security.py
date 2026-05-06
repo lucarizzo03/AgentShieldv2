@@ -123,12 +123,22 @@ def _verify_auth0_bearer(token: str) -> UserAuthContext:
 
 async def verify_agent_auth(
     request: Request,
+    authorization: str | None = Header(default=None),
     x_agent_id: str | None = Header(default=None),
     x_timestamp: str | None = Header(default=None),
     x_signature: str | None = Header(default=None),
 ) -> AuthContext:
     settings = get_settings()
 
+    # Auth0 Bearer — accepted from dashboard operators and dev test buttons.
+    # agent_id is taken from x-agent-id (unauthenticated claim; the spend route
+    # validates it exists and is active before running checks).
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        user_ctx = _verify_auth0_bearer(token)
+        return AuthContext(principal_id=user_ctx.sub, method="auth0", agent_id=x_agent_id)
+
+    # HMAC-SHA256 — signed by real agent SDK.
     if x_agent_id and x_timestamp and x_signature:
         _validate_timestamp(x_timestamp, settings.signature_tolerance_seconds)
         body_hash = _body_sha256(await request.body())
@@ -164,7 +174,7 @@ async def verify_agent_auth(
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing authentication. Provide HMAC signature headers (x-agent-id, x-timestamp, x-signature).",
+        detail="Missing authentication. Provide an Auth0 Bearer token or HMAC signature headers (x-agent-id, x-timestamp, x-signature).",
     )
 
 
