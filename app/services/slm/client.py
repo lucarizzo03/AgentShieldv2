@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 import anthropic
@@ -64,16 +65,18 @@ class AnthropicSemanticClient:
         network: str | None,
         destination_address: str | None,
     ) -> dict[str, Any]:
+        # json.dumps escapes quotes, backslashes, and control characters in all
+        # user-controlled fields, preventing prompt injection via crafted strings.
         user_input = (
-            f'goal="{declared_goal}", '
+            f"goal={json.dumps(declared_goal)}, "
             f"amount_cents={amount_cents}, "
-            f'vendor="{vendor_url_or_name}", '
-            f'item="{item_description}"'
+            f"vendor={json.dumps(vendor_url_or_name)}, "
+            f"item={json.dumps(item_description)}"
         )
         if stablecoin_symbol:
-            user_input += f', stablecoin="{stablecoin_symbol}"'
+            user_input += f", stablecoin={json.dumps(stablecoin_symbol)}"
         if network:
-            user_input += f', network="{network}"'
+            user_input += f", network={json.dumps(network)}"
 
         try:
             msg = await self._client.messages.create(
@@ -82,7 +85,8 @@ class AnthropicSemanticClient:
                 system=_SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_input}],
             )
-            import json, re, logging
+            import re
+            import logging
             raw = msg.content[0].text.strip()
 
             # strip markdown code fences if present

@@ -10,16 +10,27 @@ from app.api.v1.schemas.onboarding import (
     OnboardingBootstrapResponse,
     OnboardingChecklistResponse,
 )
+from app.core.security import UserAuthContext, verify_user_auth
 from app.db.postgres import get_session
 from app.models.agent import Agent
 from app.models.spend_audit_log import SpendAuditLog
+from app.services.user_identity import get_or_create_user
 
 router = APIRouter(tags=["onboarding"])
 
 
 @router.post("/onboarding/bootstrap", response_model=OnboardingBootstrapResponse)
-async def bootstrap_onboarding(payload: OnboardingBootstrapRequest, session: Session = Depends(get_session)):
-    existing = session.exec(select(Agent).where(Agent.display_name == payload.agent_name)).first()
+async def bootstrap_onboarding(
+    payload: OnboardingBootstrapRequest,
+    auth: UserAuthContext = Depends(verify_user_auth),
+    session: Session = Depends(get_session),
+):
+    user = get_or_create_user(session, auth)
+    existing = session.exec(
+        select(Agent)
+        .where(Agent.display_name == payload.agent_name)
+        .where(Agent.owner_user_id == user.id)
+    ).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -39,6 +50,7 @@ async def bootstrap_onboarding(payload: OnboardingBootstrapRequest, session: Ses
         allowed_networks=payload.allowed_networks or ["base"],
         allowed_stablecoins=payload.allowed_tokens or ["USDC"],
         currency="USD",
+        owner_user_id=user.id,
         hmac_secret=hmac_secret,
         hmac_secret_rotated_at=now,
         created_at=now,

@@ -1,3 +1,5 @@
+import asyncio
+from contextlib import asynccontextmanager
 from time import perf_counter
 from uuid import uuid4
 
@@ -6,26 +8,36 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.routes.agents import router as agents_router
 from app.api.v1.routes.dashboard import router as dashboard_router
+from app.api.v1.routes.health import router as health_router
 from app.api.v1.routes.hitl import router as hitl_router
 from app.api.v1.routes.onboarding import router as onboarding_router
 from app.api.v1.routes.spend import router as spend_router
 from app.core.logging import configure_logging
 from app.db.postgres import create_db_and_tables
+from app.services.hitl.expiry_sweeper import run_expiry_sweeper
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    create_db_and_tables()
+    sweeper = asyncio.create_task(run_expiry_sweeper())
+    yield
+    sweeper.cancel()
+    try:
+        await sweeper
+    except asyncio.CancelledError:
+        pass
 
 
 def create_app() -> FastAPI:
     configure_logging()
-    app = FastAPI(title="AgentShield", version="0.1.0")
+    app = FastAPI(title="AgentShield", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    @app.on_event("startup")
-    def on_startup() -> None:
-        create_db_and_tables()
 
     @app.middleware("http")
     async def request_context_middleware(request: Request, call_next):
@@ -37,6 +49,7 @@ def create_app() -> FastAPI:
         response.headers["x-latency-ms"] = f"{(perf_counter() - start) * 1000:.2f}"
         return response
 
+    app.include_router(health_router)
     app.include_router(spend_router, prefix="/v1")
     app.include_router(hitl_router, prefix="/v1")
     app.include_router(agents_router, prefix="/v1")

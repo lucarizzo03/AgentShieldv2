@@ -4,7 +4,6 @@ const AUTH_STORAGE_KEY = "agentshield_id_token";
 export function authHeaders(agentId, extra = {}) {
   return {
     "Content-Type": "application/json",
-    "x-agent-key": "local-dev-key",
     ...(agentId ? { "x-agent-id": agentId } : {}),
     ...extra,
   };
@@ -68,11 +67,8 @@ export async function getNotifications(agentId) {
 export async function resolveRequest(requestId, decision, resolverId = "dashboard:operator") {
   return request(`/hitl/resolve/${requestId}`, {
     method: "POST",
-    headers: {
-      ...authHeaders(undefined),
-      "x-webhook-signature": "sig_ok",
-    },
-    authMode: "none",
+    headers: { "Content-Type": "application/json" },
+    authMode: "user",
     body: JSON.stringify({
       decision,
       resolver_id: resolverId,
