@@ -19,7 +19,6 @@ class SpendRequest(BaseModel):
     destination_address: str | None = Field(default=None, min_length=16, max_length=128)
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
     agent_callback_url: HttpUrl | None = None
-    dev_preset: Literal["ALIGNED", "WEAK", "MISMATCH"] | None = None
 
     @model_validator(mode="after")
     def validate_stablecoin_fields(self) -> "SpendRequest":

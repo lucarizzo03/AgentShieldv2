@@ -19,7 +19,7 @@ Three comprehensive scenario tests covering every decision path in AgentShield.
     • Network not in allowed list → NETWORK_NOT_ALLOWED
     • Stablecoin token not in allowed list → STABLECOIN_NOT_ALLOWED
     • Destination address on denylist → DESTINATION_DENYLISTED
-    • dev_preset MISMATCH → SEMANTIC_MISMATCH_HIGH
+    • mocked MISMATCH label → SEMANTIC_MISMATCH_HIGH
     • All produce 403, BLOCKED audit log
 """
 import hashlib

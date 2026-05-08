@@ -15,6 +15,13 @@ class AgentCreateRequest(BaseModel):
     asset_type: Literal["STABLECOIN", "FIAT"]
     allowed_networks: list[str] = Field(default_factory=list)
     allowed_tokens: list[str] = Field(default_factory=list)
+    allowed_scopes: list[str] = Field(default_factory=list)
+
+
+class AgentScopesUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    allowed_scopes: list[str]
 
 
 class AgentCreateResponse(BaseModel):

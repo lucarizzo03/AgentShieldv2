@@ -146,3 +146,12 @@ export async function getAgent(agentId) {
   return data.agents.find((a) => a.agent_id === agentId) || null;
 }
 
+export async function updateAgentScopes(agentId, allowedScopes) {
+  return request(`/agents/${agentId}/scopes`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ allowed_scopes: allowedScopes }),
+    authMode: "user",
+  });
+}
+
