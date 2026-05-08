@@ -49,56 +49,53 @@ flowchart TD
 
 ## Architecture & Design Decisions
 
-### (a) Check A runs in Redis
+**Budget reservation uses an atomic Lua script, not GET → compare → INCRBY.**
+Two concurrent requests can both pass a non-atomic budget check before either increments the counter. `_CHECK_AND_RESERVE_BUDGET` in `quantitative.py` does the read, compare, and increment in a single Lua call so Redis executes it atomically.
 
-All quantitative checks use atomic Redis operations: `INCR` + `EXPIRE` in a Lua script for budget reservation, counter increments for loop and burst detection. This keeps sub-millisecond latency on the hot path and avoids row-lock contention under concurrent agent traffic. The failure mode is bounded — if Redis is unreachable, the check returns suspicious rather than hard-blocking, so a Redis outage degrades to HITL rather than a full outage.
+**Budget key includes the date: `budget:daily:{agent_id}:{asset_type}:{YYYY-MM-DD}`.**
+The date expires the key naturally — no cron, no DELETE. Each `asset_type` gets its own key, so stablecoin and fiat budgets are independent. SUSPICIOUS and MALICIOUS verdicts roll back the reservation; it only commits on a successful payment execution.
 
-### (b) Budget key structure: `budget:daily:{agent_id}:{asset_type}:{YYYY-MM-DD}`
+**Loop detection stores a fingerprint counter, not full transaction records.**
+`SHA256(vendor|amount|item|asset_type|stablecoin|network|address)` → one counter per unique transaction shape, TTL = `LOOP_WINDOW_SECONDS`. Space is proportional to distinct fingerprints, not total transaction volume.
 
-The date segment in the key means daily budget windows expire naturally via Redis TTL — no cron job, no `DELETE` query, zero-cost rollover at midnight. Separating by `asset_type` lets agents have independent stablecoin and fiat budgets without a secondary index. Budget is committed only on successful payment execution; SUSPICIOUS and MALICIOUS verdicts roll back the reservation.
+**Check B policy lives on the `Agent` row, not a separate table.**
+Blocklists, thresholds, and stablecoin rules change infrequently. One primary-key read per request, no joins. Hard-deny rules (vendor blocklist, network allowlist) live in Postgres rather than Redis because a missed hard-deny is worse than a missed soft-risk — durability matters more than sub-ms latency here.
 
-### (c) Loop detection via SHA256 fingerprint + sliding TTL window
+**The four checks run sequentially, not in parallel.**
+`engine.py` runs A → B → C → D with sequential `await` calls. There is no `asyncio.gather()`. Check B is synchronous. The dominant latency is the two Claude API calls (C and D); parallelising them is a future optimisation.
 
-The transaction fingerprint is `SHA256(vendor|amount|item|asset_type|stablecoin|network|address)`. Each fingerprint counter has a sliding TTL (`LOOP_WINDOW_SECONDS`). This uses constant space per agent regardless of transaction volume — the trade-off is probabilistic: two structurally identical transactions with different fields that hash to the same value would share a counter, which is an acceptable false-positive over missing a real loop.
+**Check C falls back to `WEAK / risk_score=55` on Anthropic API failure, not a hard block.**
+A WEAK result with `raw_score >= SEMANTIC_WEAK_SUSPICIOUS_MIN_SCORE` (default 50) routes to HITL. LLM downtime degrades to human review rather than blocking all transactions.
 
-### (d) Check B lives on the Agent record in Postgres
+**Idempotency is opt-in, cached in Redis at 24-hour TTL.**
+Without an `idempotency_key`, duplicate requests re-run all checks and can execute multiple payments. With one, the cached response is returned immediately on retry. Redis eviction means a re-run is possible — acceptable tradeoff over a Postgres fallback read on every request.
 
-Agent policy (blocklists, thresholds, stablecoin rules) is low-cardinality data that changes only when an operator updates it. Storing it on the `Agent` row means Check B reads one row with a primary-key lookup — no joins, no separate policy table, ACID guarantees on updates. Hard-deny rules (blocked vendors, disallowed networks) live here rather than Redis because a missed hard-deny is a higher-severity failure than a missed soft-risk; Postgres durability is worth the slightly higher read latency.
-
-### (e) All four checks run in parallel
-
-Sequential execution at ~50 ms per check would add ~200 ms to every payment path. Running all four in parallel keeps worst-case latency close to the slowest single check (~55 ms for the Claude API calls). Fail-fast is still preserved: if any check returns a hard-deny before the others finish, verdict synthesis produces `MALICIOUS` regardless.
-
-### (f) Semantic check falls back to WEAK/55, not a hard block
-
-When the Anthropic API is unavailable, Check C returns `WEAK / risk_score=55` — suspicious, not hard-deny. An LLM availability issue should not block legitimate payments or fail the entire request. `WEAK` with `risk_score >= 50` (configurable via `SEMANTIC_WEAK_SUSPICIOUS_MIN_SCORE`) routes to HITL, so a human still reviews the transaction without the agent being permanently blocked. MISMATCH and high-confidence misalignment still produce hard-deny when the API is reachable.
-
-### (g) Idempotency cache in Redis with 24-hour TTL
-
-Idempotency keys are cached in Redis rather than Postgres to keep reads on the hot path. The 24-hour TTL matches the retry horizon most agent frameworks use for transient failures. Redis eviction (e.g., under memory pressure) is an acceptable failure mode: a re-run request without a cache hit re-executes all checks and may trigger a second payment — the correct mitigation is provisioning Redis with enough memory, not adding a fallback read to Postgres on every request.
-
-### (h) HMAC-SHA256 over API keys or JWTs for agent requests
-
-API keys prove identity but not payload integrity. JWTs prove identity but are difficult to revoke mid-validity-window. HMAC-SHA256 over a canonical message that includes the body hash and a timestamp gives three properties simultaneously: (1) body hash prevents payload tampering in transit, (2) timestamp prevents replay outside a 5-minute window, (3) `agent_id` in the canonical message binds the signature to a specific agent so a credential stolen from one agent cannot sign for another. Rotation takes effect immediately with no grace period — any in-flight signed requests with the old secret fail. Dashboard operators authenticate with Auth0 JWTs; the JWT invalidation problem is acceptable there because operators are humans who can re-login, not high-frequency automated callers.
+**Agent requests use HMAC-SHA256 rather than API keys or JWTs.**
+API keys don't cover payload integrity. JWTs can't be revoked mid-window. The 5-line canonical message (method, path, timestamp, body hash, agent_id) gives payload tamper detection, replay prevention, and agent binding in one signature. Rotation is immediate — no grace period.
 
 ---
 
 ## Threat Model
 
-### What AgentShield protects against
+**What it catches:**
 
-- **Compromised or manipulated agent** — an agent whose instructions have been altered (prompt injection, supply chain attack) attempts to send funds to an attacker-controlled address or vendor. Check B catches blocklisted vendors and disallowed destinations; Check C catches goal/vendor misalignment; Check D catches goals outside the agent's configured scope.
-- **Spending loop attacks** — an agent stuck in a retry loop or adversarially instructed to repeat the same transaction fires the fingerprint counter in Redis, triggering suspicious after `LOOP_THRESHOLD` hits within the window.
-- **Phishing vendor substitution** — an attacker substitutes a legitimate vendor URL with a look-alike. Check B runs substring matching against the blocklist and phishing domain heuristics; Check C evaluates semantic coherence between declared goal, vendor, and item.
-- **Goal drift from prompt injection** — an agent's declared goal is injected with instructions to perform a transaction outside its intended purpose (e.g., a flight-booking agent asked to buy crypto). Check D compares the declared goal against the operator-configured `allowed_scopes` and flags any deviation.
-- **Over-budget spending** — per-agent daily budget caps with atomic enforcement prevent runaway spending even when the agent sends many requests simultaneously.
+| Threat | How |
+|---|---|
+| Agent sends funds to a blocklisted or disallowed vendor/address | Check B: substring blocklist, destination denylist/allowlist |
+| Phishing vendor substitution | Check B: phishing domain heuristics; Check C: goal/vendor/item coherence |
+| Goal/vendor misalignment (prompt injection, jailbreak) | Check C: semantic alignment label; MISMATCH → hard deny |
+| Goal outside agent's intended purpose (scope creep) | Check D: declared goal vs. `allowed_scopes` |
+| Repeated identical transactions (loop or retry storm) | Check A: fingerprint counter with TTL window |
+| Budget overrun under concurrent load | Check A: atomic Lua budget reservation prevents TOCTOU |
 
-### What AgentShield does not protect against
+**What it does not catch:**
 
-- **Compromised operator** — an operator with valid Auth0 credentials can update agent policies, drain the budget limit, or directly call the HITL resolve endpoint. AgentShield trusts authenticated operators.
-- **Redis partition failure** — Check A uses a single Redis instance. Under a network partition, budget reservation may succeed on a replica that diverges from the primary, potentially allowing a budget overrun. There is no distributed transaction across Redis and Postgres.
-- **Adversarially manipulated semantic check** — a sufficiently crafted `declared_goal` string may fool Claude Haiku into labeling a misaligned transaction as `ALIGNED`. The quantitative and policy checks are not susceptible to prompt injection; the semantic and goal-drift checks are LLM-based and have the same attack surface as any LLM call.
-- **Post-execution compromise** — AgentShield intercepts the spend intent before execution. If the payment adapter is compromised after AgentShield approves a transaction, there is no rollback mechanism.
+| Gap | Why |
+|---|---|
+| Compromised operator | Valid Auth0 credentials can update policies, raise limits, and approve any HITL request |
+| Redis unavailable | Check A raises a 500 — there is no fallback to SUSPICIOUS when Redis is unreachable |
+| Adversarial semantic manipulation | A crafted `declared_goal` can produce `ALIGNED` from Claude Haiku; Checks C and D are LLM-based and share that attack surface |
+| Post-execution compromise | AgentShield intercepts before payment; no rollback if the adapter is compromised after approval |
 
 ---
 
@@ -112,7 +109,7 @@ API keys prove identity but not payload integrity. JWTs prove identity but are d
 
 **Dashboard:** React + Vite + Tailwind, port 5173
 
-**Auth:** Per-agent HMAC-SHA256 signed requests; Auth0 JWT for dashboard operators; dev key bypass in `APP_ENV=dev`
+**Auth:** Per-agent HMAC-SHA256 signed requests; Auth0 JWT for dashboard operators
 
 ---
 
@@ -170,7 +167,7 @@ APP_ENV=dev                                # dev | prod
 POSTGRES_DSN=postgresql+psycopg://...
 REDIS_DSN=redis://localhost:6379/0
 ANTHROPIC_API_KEY=...                      # required for semantic check
-SLM_MODEL_NAME=claude-haiku-4-5-20251001
+ANTHROPIC_MODEL_NAME=claude-haiku-4-5-20251001
 SENDGRID_API_KEY=...                       # required for HITL email
 HITL_EMAIL_FROM=...
 HITL_EMAIL_TO=...
@@ -184,7 +181,7 @@ AUTH0_AUDIENCE=...
 AUTH0_ISSUER=...
 ```
 
-In `APP_ENV=dev`, requests can use the `x-agent-key: local-dev-key` header to bypass HMAC auth. **Never deploy with `APP_ENV=dev`.**
+`APP_ENV=dev` relaxes some runtime guards. **Never deploy with `APP_ENV=dev`.**
 
 ---
 
@@ -355,7 +352,7 @@ Same mechanics, but no `agent_id` line (4 lines instead of 5), and uses `WEBHOOK
 
 ### Dev bypass
 
-`APP_ENV=dev` only: send `x-agent-key: local-dev-key` to skip all cryptographic checks.
+`APP_ENV=dev` relaxes runtime guards (e.g., HITL webhook signature checking in tests). There is no header-based auth bypass in the current codebase — all production auth paths (HMAC or Auth0 Bearer) are always enforced by `verify_agent_auth`.
 
 ---
 
@@ -374,7 +371,7 @@ Loop pattern detection:
   → suspicious if count >= LOOP_THRESHOLD (default 5)
 
 Destination burst:
-  key: dest:burst:{agent_id}:{network}:{address}  (TTL: 60 sec)
+  key: dest:burst:{agent_id}:{network}:{address}  (TTL: LOOP_WINDOW_SECONDS)
   → suspicious if count >= 5
 ```
 
@@ -383,7 +380,8 @@ Destination burst:
 ```
 Vendor blocklist        → hard deny if vendor substring-matches any blocked_vendors
 Phishing domain rules   → hard deny on path parameter patterns / random-looking subdomains
-Amount threshold        → suspicious if amount > per_txn_auto_approve_limit_cents
+Amount threshold        → suspicious if amount > hitl_required_over_cents (when set)
+                          or per_txn_auto_approve_limit_cents (fallback)
 Stablecoin rules:
   symbol not in allowed_stablecoins            → hard deny
   network not in allowed_networks              → hard deny
@@ -404,9 +402,10 @@ Sends `declared_goal`, `amount_cents`, `vendor`, `item`, `stablecoin_symbol`, `n
 ```
 
 Verdict mapping:
-- `MISMATCH` → hard deny
-- `WEAK` with `raw_risk_score >= SEMANTIC_WEAK_SUSPICIOUS_MIN_SCORE` (default 50) → suspicious
-- Otherwise → pass
+- `MISMATCH` label, or `raw_score >= 85` (promotes label to `MISMATCH`) → hard deny
+- `WEAK` with `raw_score >= SEMANTIC_WEAK_SUSPICIOUS_MIN_SCORE` (default 50) → suspicious
+- `WEAK` with `raw_score < 50` → pass (low-confidence weak signal, not flagged)
+- `ALIGNED` → pass
 
 The raw score from Claude is normalized to 0–100 before comparison (values in the 0–1 range are scaled up). If the Anthropic API is unavailable, the check falls back to `WEAK / risk_score=55` (suspicious, never hard block).
 
