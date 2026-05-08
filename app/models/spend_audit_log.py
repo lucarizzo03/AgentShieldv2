@@ -21,6 +21,7 @@ class SpendAuditLog(SQLModel, table=True):
     quantitative_result: dict = Field(default_factory=dict, sa_column=Column(JSON))
     policy_result: dict = Field(default_factory=dict, sa_column=Column(JSON))
     semantic_result: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    goal_drift_result: dict = Field(default_factory=dict, sa_column=Column(JSON))
     verdict: str = Field(max_length=16)
     status: str = Field(max_length=48)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), index=True)

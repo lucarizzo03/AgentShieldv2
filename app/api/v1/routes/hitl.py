@@ -138,6 +138,7 @@ async def _resolve_pending(
             quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
             policy_result=pending.verdict_snapshot.get("policy_result", {}),
             semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
+            goal_drift_result=pending.verdict_snapshot.get("goal_drift_result", {}),
             verdict="SAFE",
             status="APPROVED_BY_HUMAN_EXECUTED",
         ))
@@ -165,6 +166,7 @@ async def _resolve_pending(
             quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
             policy_result=pending.verdict_snapshot.get("policy_result", {}),
             semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
+            goal_drift_result=pending.verdict_snapshot.get("goal_drift_result", {}),
             verdict="MALICIOUS",
             status="DENIED_BY_HUMAN",
         ))

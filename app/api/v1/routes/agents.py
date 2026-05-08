@@ -10,6 +10,7 @@ from app.api.v1.schemas.agent import (
     AgentCreateResponse,
     AgentListResponse,
     AgentRotateHmacResponse,
+    AgentScopesUpdateRequest,
 )
 from app.core.security import AuthContext, UserAuthContext, verify_agent_auth, verify_user_auth
 from app.db.postgres import get_session
@@ -52,6 +53,7 @@ async def create_agent(
         blocked_vendors=payload.blocked_vendors,
         allowed_networks=payload.allowed_networks or ["base"],
         allowed_stablecoins=payload.allowed_tokens or ["USDC"],
+        allowed_scopes=payload.allowed_scopes,
         currency="USD",
         owner_user_id=user.id,
         hmac_secret=hmac_secret,
@@ -103,6 +105,26 @@ async def list_agents(
             for a in agents
         ]
     }
+
+
+@router.patch("/agents/{agent_id}/scopes")
+async def update_agent_scopes(
+    agent_id: str,
+    payload: AgentScopesUpdateRequest,
+    auth: UserAuthContext = Depends(verify_user_auth),
+    session: Session = Depends(get_session),
+):
+    user = get_or_create_user(session, auth)
+    agent = session.exec(
+        select(Agent).where(Agent.agent_id == agent_id).where(Agent.owner_user_id == user.id)
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    agent.allowed_scopes = payload.allowed_scopes
+    agent.updated_at = datetime.now(timezone.utc)
+    session.add(agent)
+    session.commit()
+    return {"agent_id": agent_id, "allowed_scopes": agent.allowed_scopes}
 
 
 @router.post("/agents/{agent_id}/credentials/hmac/rotate", response_model=AgentRotateHmacResponse)

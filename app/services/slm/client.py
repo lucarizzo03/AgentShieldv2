@@ -9,6 +9,29 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+_SCOPE_SYSTEM_PROMPT = """You are an agent scope validator. Determine whether a transaction's declared goal falls within the agent's permitted operational scopes.
+
+Output ONLY a JSON object with exactly these keys:
+- "within_scope": boolean — true if the goal falls within ANY allowed scope, false only if it clearly falls outside ALL of them
+- "matched_scope": string or null — the closest matching scope string, or null if none matched
+- "confidence": integer 0-100
+- "reason": short string explaining the decision
+
+Be generous: partial alignment counts as within_scope=true. Return within_scope=false only when the goal is clearly unrelated to every listed scope.
+
+Examples:
+
+goal="Book flight to NYC conference", scopes=["travel bookings", "office supplies"]
+→ {"within_scope": true, "matched_scope": "travel bookings", "confidence": 95, "reason": "flight booking clearly within travel scope"}
+
+goal="Purchase GPU cluster for ML training", scopes=["travel bookings", "office supplies"]
+→ {"within_scope": false, "matched_scope": null, "confidence": 88, "reason": "hardware purchase outside travel and office supply scopes"}
+
+goal="Buy printer paper", scopes=["office supplies", "software subscriptions"]
+→ {"within_scope": true, "matched_scope": "office supplies", "confidence": 99, "reason": "printer paper is an office supply"}
+
+Now evaluate and output ONLY the JSON object:"""
+
 # Cached at the Anthropic API level via cache_control; local reference never changes.
 _SYSTEM_PROMPT = """You are a financial transaction risk evaluator for an autonomous AI agent spending firewall.
 
@@ -127,3 +150,39 @@ class AnthropicSemanticClient:
         except Exception:
             logger.warning("SLM call failed", exc_info=True)
             return {"alignment_label": "WEAK", "risk_score": 55, "reason_codes": ["SLM_UNAVAILABLE"]}
+
+    async def goal_scope_check(
+        self,
+        declared_goal: str,
+        allowed_scopes: list[str],
+    ) -> dict[str, Any]:
+        scopes_json = json.dumps(allowed_scopes)
+        user_input = f"goal={json.dumps(declared_goal)}, scopes={scopes_json}"
+        try:
+            msg = await self._client.messages.create(
+                model=self._model,
+                max_tokens=128,
+                temperature=0,
+                system=[
+                    {
+                        "type": "text",
+                        "text": _SCOPE_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[{"role": "user", "content": user_input}],
+            )
+            raw = msg.content[0].text.strip()
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group())
+                if "within_scope" in parsed:
+                    return parsed
+            logger.warning("Goal scope check returned unexpected format: %s", raw[:200])
+            return {"within_scope": True, "matched_scope": None, "confidence": 0, "reason": "SLM_UNEXPECTED_RESPONSE"}
+        except Exception:
+            logger.warning("Goal scope check failed", exc_info=True)
+            # Fail open — don't block on API errors
+            return {"within_scope": True, "matched_scope": None, "confidence": 0, "reason": "SLM_UNAVAILABLE"}

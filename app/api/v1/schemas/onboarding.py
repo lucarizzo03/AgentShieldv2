@@ -13,6 +13,7 @@ class OnboardingBootstrapRequest(BaseModel):
     allowed_networks: list[str] = Field(default_factory=lambda: ["base"])
     allowed_tokens: list[str] = Field(default_factory=lambda: ["USDC"])
     blocked_vendors: list[str] = Field(default_factory=lambda: ["badvendor.example"])
+    allowed_scopes: list[str] = Field(default_factory=list)
 
 
 class OnboardingBootstrapResponse(BaseModel):

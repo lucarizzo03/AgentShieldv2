@@ -19,4 +19,5 @@ class TriangulationResult:
     quantitative_result: dict
     policy_result: dict
     semantic_result: dict
+    goal_drift_result: dict
 

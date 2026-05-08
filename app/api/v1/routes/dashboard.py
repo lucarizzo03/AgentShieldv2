@@ -93,6 +93,7 @@ async def list_dashboard_notifications(
                     quantitative_result=audit.quantitative_result,
                     policy_result=audit.policy_result,
                     semantic_result=audit.semantic_result,
+                    goal_drift_result=audit.goal_drift_result,
                     verdict=audit.verdict,
                     status="EXPIRED",
                 ))

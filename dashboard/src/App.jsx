@@ -33,6 +33,7 @@ import {
   runDevTestRequest,
   startPhoneVerification,
   submitSpendRequest,
+  updateAgentScopes,
   updateHitlPreferences,
   verifyPhone,
 } from "./lib/api";
@@ -212,6 +213,7 @@ export default function App() {
       });
       const newRows = activityResp.activity.map((item) => {
         const slm = item.semantic_result || {};
+        const gd = item.goal_drift_result || {};
         return {
           id: item.request_id,
           time: new Date(item.created_at).toLocaleTimeString("en-US", { hour12: false }),
@@ -231,6 +233,12 @@ export default function App() {
               verdict: slm.alignment_label || item.verdict,
               reason: (slm.reason_codes || []).join(", ") || "No reason supplied",
             },
+            goalDrift: {
+              skipped: gd.skipped ?? true,
+              within_scope: gd.within_scope ?? true,
+              matched_scope: gd.matched_scope ?? null,
+              reason: gd.reason ?? "",
+            },
             raw: {
               request_id: item.request_id,
               declared_goal: item.declared_goal,
@@ -247,6 +255,7 @@ export default function App() {
         notificationResp.notifications.map((n) => {
           const payload = n.payload_json || {};
           const sem = payload.semantic_result || {};
+          const gd = payload.goal_drift_result || {};
           const score = +(1 - Number(sem.risk_score ?? 50) / 100).toFixed(2);
           return {
             id: n.id,
@@ -260,6 +269,12 @@ export default function App() {
             slmReason: (sem.reason_codes || payload.reasons || []).join(", "),
             redis: buildChecklistRows(payload.quantitative_result, "").map((r) => `${r[1]} ${r[0]} ${r[2]}`),
             policy: buildChecklistRows(payload.policy_result, "").map((r) => `${r[1]} ${r[0]} ${r[2]}`),
+            goalDrift: {
+              skipped: gd.skipped ?? true,
+              within_scope: gd.within_scope ?? true,
+              matched_scope: gd.matched_scope ?? null,
+              reason: gd.reason ?? "",
+            },
           };
         })
       );
@@ -426,7 +441,7 @@ export default function App() {
     const safeAddr = "0x" + crypto.getRandomValues(new Uint8Array(20)).reduce((s, b) => s + b.toString(16).padStart(2, "0"), "");
     runDevTestRequest(activeAgentId, {
       agent_id: activeAgentId,
-      declared_goal: "Pay contractor invoice for design work",
+      declared_goal: "Pay contractor invoice for logo design work",
       amount_cents: 100,
       currency: "USD",
       vendor_url_or_name: "contractor.eth",
@@ -436,7 +451,6 @@ export default function App() {
       network: "base",
       destination_address: safeAddr,
       idempotency_key: `quick-safe-${Date.now()}`,
-      dev_preset: "ALIGNED",
     })
       .then(() => Promise.all([refresh(activeAgentId, true), refreshChecklist(activeAgentId)]))
       .then(() => toast("✓ SAFE test complete"))
@@ -451,17 +465,16 @@ export default function App() {
     const hitlAddr = "0x" + crypto.getRandomValues(new Uint8Array(20)).reduce((s, b) => s + b.toString(16).padStart(2, "0"), "");
     runDevTestRequest(activeAgentId, {
       agent_id: activeAgentId,
-      declared_goal: "Book flight to NYC conference",
-      amount_cents: 500,
+      declared_goal: "Subscribe to GitHub Enterprise for the engineering team",
+      amount_cents: 50000,
       currency: "USD",
-      vendor_url_or_name: "Uber Eats",
-      item_description: "Large dinner order",
+      vendor_url_or_name: "github.com",
+      item_description: "GitHub Enterprise Cloud annual subscription",
       asset_type: "STABLECOIN",
       stablecoin_symbol: "USDC",
       network: "base",
       destination_address: hitlAddr,
       idempotency_key: `quick-suspicious-${Date.now()}`,
-      dev_preset: "WEAK",
     })
       .then(() => Promise.all([refresh(activeAgentId, true), refreshChecklist(activeAgentId)]))
       .then(() => {
@@ -796,6 +809,14 @@ print(response.status_code, response.text)`;
                             <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>alignment score</span><span>{r.details.slm.score}</span></div>
                             <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>verdict</span><span>{r.details.slm.verdict}</span></div>
                             <div style={{ display: "grid", gridTemplateColumns: "140px 1fr" }}><span style={{ color: "var(--text-2)" }}>reason</span><span>{r.details.slm.reason}</span></div>
+                            <div style={{ color: "var(--text-2)", fontSize: 11, margin: "6px 0 6px" }}>Check D · Goal Drift</div>
+                            {r.details.goalDrift.skipped ? (
+                              <div style={{ color: "var(--text-3)" }}>skipped — no scopes defined</div>
+                            ) : r.details.goalDrift.within_scope ? (
+                              <div style={{ display: "grid", gridTemplateColumns: "140px 1fr" }}><span style={{ color: "var(--text-2)" }}>matched scope</span><span style={{ color: "var(--green)" }}>✓ {r.details.goalDrift.matched_scope || "within scope"}</span></div>
+                            ) : (
+                              <div style={{ color: "var(--red)" }}>✗ GOAL_DRIFT_DETECTED — {r.details.goalDrift.reason || "goal outside allowed scopes"}</div>
+                            )}
                           </div>
                           <div>
                             <button onClick={() => setRawOpen((p) => (p === r.id ? null : r.id))} style={{ background: "transparent", border: "none", color: "var(--text-2)", fontSize: 11, cursor: "pointer", padding: 0 }}>
@@ -874,9 +895,20 @@ print(response.status_code, response.text)`;
                             <span style={{ color: "var(--text-2)" }}>Redis</span>
                             <div>{a.redis.map((s) => <div key={s}>{s}</div>)}</div>
                           </div>
-                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr", marginBottom: 8 }}>
                             <span style={{ color: "var(--text-2)" }}>Policy</span>
                             <div>{a.policy.map((s) => <div key={s}>{s}</div>)}</div>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr" }}>
+                            <span style={{ color: "var(--text-2)" }}>Goal Drift</span>
+                            <div>
+                              {a.goalDrift.skipped
+                                ? <span style={{ color: "var(--text-3)" }}>skipped — no scopes</span>
+                                : a.goalDrift.within_scope
+                                  ? <span style={{ color: "var(--green)" }}>✓ {a.goalDrift.matched_scope || "within scope"}</span>
+                                  : <span style={{ color: "var(--red)" }}>✗ drift — {a.goalDrift.reason || "outside allowed scopes"}</span>
+                              }
+                            </div>
                           </div>
                         </div>
                         <div style={{ padding: 10 }}>

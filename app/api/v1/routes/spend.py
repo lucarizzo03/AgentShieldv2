@@ -93,7 +93,6 @@ async def spend_request(
         network=payload.network,
         destination_address=payload.destination_address,
         fingerprint=fingerprint,
-        dev_preset=payload.dev_preset if (settings.app_env == "dev" or auth_context.method == "auth0") else None,
     )
 
     now = datetime.now(timezone.utc)
@@ -114,6 +113,7 @@ async def spend_request(
             quantitative_result=tri.quantitative_result,
             policy_result=tri.policy_result,
             semantic_result=tri.semantic_result,
+            goal_drift_result=tri.goal_drift_result,
             verdict="SAFE",
             status="APPROVED_EXECUTED",
         )
@@ -136,7 +136,6 @@ async def spend_request(
                 # Reservation was made atomically during the budget check — just refresh TTL.
                 await finalize_budget_reservation(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
             else:
-                # dev_preset path: quantitative check was skipped, commit budget normally.
                 await commit_budget_spend(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
         except Exception:
             logger.critical(
@@ -172,6 +171,7 @@ async def spend_request(
             quantitative_result=tri.quantitative_result,
             policy_result=tri.policy_result,
             semantic_result=tri.semantic_result,
+            goal_drift_result=tri.goal_drift_result,
             verdict="MALICIOUS",
             status="BLOCKED",
         )
@@ -222,6 +222,7 @@ async def spend_request(
             "quantitative_result": tri.quantitative_result,
             "policy_result": tri.policy_result,
             "semantic_result": tri.semantic_result,
+            "goal_drift_result": tri.goal_drift_result,
         },
         state="WAITING_HUMAN",
         hitl_channel="email+dashboard",
@@ -254,6 +255,7 @@ async def spend_request(
             "quantitative_result": tri.quantitative_result,
             "policy_result": tri.policy_result,
             "semantic_result": tri.semantic_result,
+            "goal_drift_result": tri.goal_drift_result,
             "expires_at": (now + timedelta(seconds=settings.hitl_default_timeout_seconds)).isoformat(),
         },
     )
@@ -272,6 +274,7 @@ async def spend_request(
         quantitative_result=tri.quantitative_result,
         policy_result=tri.policy_result,
         semantic_result=tri.semantic_result,
+        goal_drift_result=tri.goal_drift_result,
         verdict="SUSPICIOUS",
         status="PENDING_HITL",
     )

@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     hitl_default_timeout_seconds: int = Field(default=600)
     loop_window_seconds: int = Field(default=60)
     loop_threshold: int = Field(default=5)
+    semantic_weak_suspicious_min_score: int = Field(default=50)
     api_auth_header: str = Field(default="x-agent-key")
     signature_tolerance_seconds: int = Field(default=300)
     agent_hmac_secret: str = Field(default="dev-agent-hmac-secret-change-me")

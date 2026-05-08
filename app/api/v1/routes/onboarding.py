@@ -49,6 +49,7 @@ async def bootstrap_onboarding(
         blocked_vendors=payload.blocked_vendors,
         allowed_networks=payload.allowed_networks or ["base"],
         allowed_stablecoins=payload.allowed_tokens or ["USDC"],
+        allowed_scopes=payload.allowed_scopes,
         currency="USD",
         owner_user_id=user.id,
         hmac_secret=hmac_secret,
