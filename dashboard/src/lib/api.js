@@ -1,5 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/v1";
-const AUTH_STORAGE_KEY = "agentshield_id_token";
+import { clearAuthSession, getIdToken, isTokenExpired } from "./auth";
 
 export function authHeaders(agentId, extra = {}) {
   return {
@@ -13,12 +13,22 @@ async function request(path, options = {}) {
   const { authMode = "user", headers = {}, ...rest } = options;
   const finalHeaders = { ...headers };
   if (authMode === "user") {
-    const token = localStorage.getItem(AUTH_STORAGE_KEY);
+    const token = getIdToken();
+    if (isTokenExpired(token)) {
+      clearAuthSession();
+      window.location.assign("/auth");
+      throw new Error("Session expired. Please sign in again.");
+    }
     if (token && !finalHeaders.Authorization) {
       finalHeaders.Authorization = `Bearer ${token}`;
     }
   }
   const response = await fetch(`${API_BASE}${path}`, { ...rest, headers: finalHeaders });
+  if (response.status === 401 && authMode === "user") {
+    clearAuthSession();
+    window.location.assign("/auth");
+    throw new Error("Session expired. Please sign in again.");
+  }
   if (!response.ok) {
     let message = `Request failed: ${response.status}`;
     try {

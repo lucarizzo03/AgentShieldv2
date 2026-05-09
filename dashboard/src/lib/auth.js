@@ -2,6 +2,18 @@ const AUTH_STORAGE_KEY = "agentshield_id_token";
 const PKCE_VERIFIER_KEY = "agentshield_pkce_verifier";
 const RETURN_TO_KEY = "agentshield_return_to";
 
+function decodeJwtPayload(token) {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = payload.padEnd(payload.length + ((4 - (payload.length % 4)) % 4), "=");
+    return JSON.parse(atob(padded));
+  } catch {
+    return null;
+  }
+}
+
 function base64UrlEncode(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
@@ -44,8 +56,20 @@ export function getIdToken() {
   return localStorage.getItem(AUTH_STORAGE_KEY);
 }
 
+export function isTokenExpired(token, leewaySeconds = 30) {
+  if (!token) return true;
+  const payload = decodeJwtPayload(token);
+  const exp = payload?.exp;
+  if (typeof exp !== "number") {
+    // If we cannot verify expiry, keep behavior fail-open instead of logging users out.
+    return false;
+  }
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  return exp <= nowSeconds + leewaySeconds;
+}
+
 export function isAuthenticated() {
-  return Boolean(getIdToken());
+  return !isTokenExpired(getIdToken());
 }
 
 export function clearAuthSession() {
