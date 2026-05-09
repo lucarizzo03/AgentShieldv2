@@ -310,8 +310,6 @@ export default function App() {
           await refresh(first, true);
           await refreshChecklist(first);
         } else {
-          localStorage.removeItem("agentshield_creds_map");
-          setCredsMap({});
           setPage("agents");
         }
       } catch (err) {
