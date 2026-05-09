@@ -318,6 +318,8 @@ async def spend_request(
         },
         "reasons": tri.reasons,
         "next_action": "AGENT_MUST_WAIT",
+        "status_poll_url": f"{settings.api_public_url}/v1/spend-request/{request_id}/status",
+        "poll_interval_seconds": 5,
     }
     response.status_code = status.HTTP_202_ACCEPTED
     await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 202, "body": body})
