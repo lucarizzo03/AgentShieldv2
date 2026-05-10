@@ -39,6 +39,8 @@ class SpendApprovedResponse(BaseModel):
     currency: str
     reasons: list[str]
     agent_feedback: dict
+    idempotency_replay: bool = False
+    idempotency_note: str | None = None
 
 
 class SpendBlockedResponse(BaseModel):
@@ -49,6 +51,8 @@ class SpendBlockedResponse(BaseModel):
     reasons: list[str]
     next_action: Literal["DO_NOT_RETRY"]
     agent_feedback: dict
+    idempotency_replay: bool = False
+    idempotency_note: str | None = None
 
 
 class HitlStatePayload(BaseModel):
@@ -66,4 +70,6 @@ class SpendPendingResponse(BaseModel):
     reasons: list[str]
     next_action: Literal["AGENT_MUST_WAIT"]
     agent_feedback: dict
+    idempotency_replay: bool = False
+    idempotency_note: str | None = None
 
