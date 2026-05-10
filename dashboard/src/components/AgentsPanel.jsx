@@ -123,10 +123,23 @@ export default function AgentsPanel({
   onGoToActivity,
   onSaveScopes,
   scopesSaving,
+  onSaveSettings,
+  settingsSaving,
 }) {
   const [scopeDraft, setScopeDraft] = useState("");
   const [scopeEditor, setScopeEditor] = useState([]);
   const [dirtyScopes, setDirtyScopes] = useState(false);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [settingsForm, setSettingsForm] = useState({
+    name: "",
+    daily: "0",
+    perTx: "0",
+    auto: "0",
+    blocked: [],
+    draftVendor: "",
+    networks: ["base"],
+    tokens: ["USDC"],
+  });
 
   useEffect(() => {
     const next = activeAgent?.allowed_scopes || [];
@@ -134,6 +147,21 @@ export default function AgentsPanel({
     setDirtyScopes(false);
     setScopeDraft("");
   }, [activeAgent?.agent_id, activeAgent?.allowed_scopes]);
+
+  useEffect(() => {
+    if (!activeAgent) return;
+    setSettingsForm({
+      name: activeAgent.display_name || "",
+      daily: String(activeAgent.daily_spend_limit_usd ?? 0),
+      perTx: String(activeAgent.per_transaction_limit_usd ?? 0),
+      auto: String(activeAgent.auto_approve_under_usd ?? 0),
+      blocked: activeAgent.blocked_vendors || [],
+      draftVendor: "",
+      networks: activeAgent.allowed_networks?.length ? activeAgent.allowed_networks : ["base"],
+      tokens: activeAgent.allowed_tokens?.length ? activeAgent.allowed_tokens : ["USDC"],
+    });
+    setSettingsDirty(false);
+  }, [activeAgent]);
 
   const addEditorScope = () => {
     const value = scopeDraft.trim();
@@ -146,6 +174,64 @@ export default function AgentsPanel({
   const removeEditorScope = (scope) => {
     setScopeEditor((prev) => prev.filter((entry) => entry !== scope));
     setDirtyScopes(true);
+  };
+
+  const updateSettingsField = (key, value) => {
+    setSettingsForm((prev) => ({ ...prev, [key]: value }));
+    setSettingsDirty(true);
+  };
+
+  const addSettingsBlockedVendor = () => {
+    const value = settingsForm.draftVendor.trim();
+    if (!value) return;
+    setSettingsForm((prev) => ({
+      ...prev,
+      blocked: Array.from(new Set([...prev.blocked, value])),
+      draftVendor: "",
+    }));
+    setSettingsDirty(true);
+  };
+
+  const removeSettingsBlockedVendor = (vendor) => {
+    setSettingsForm((prev) => ({ ...prev, blocked: prev.blocked.filter((entry) => entry !== vendor) }));
+    setSettingsDirty(true);
+  };
+
+  const toggleSettingsNetwork = (network) => {
+    setSettingsForm((prev) => ({
+      ...prev,
+      networks: prev.networks.includes(network)
+        ? prev.networks.filter((entry) => entry !== network)
+        : [...prev.networks, network],
+    }));
+    setSettingsDirty(true);
+  };
+
+  const toggleSettingsToken = (token) => {
+    setSettingsForm((prev) => ({
+      ...prev,
+      tokens: prev.tokens.includes(token) ? prev.tokens.filter((entry) => entry !== token) : [...prev.tokens, token],
+    }));
+    setSettingsDirty(true);
+  };
+
+  const handleSaveSettings = async () => {
+    const daily = Math.trunc(Number(settingsForm.daily));
+    const perTx = Math.trunc(Number(settingsForm.perTx));
+    const auto = Math.trunc(Number(settingsForm.auto));
+    if (!settingsForm.name.trim()) return;
+    if (![daily, perTx, auto].every((value) => Number.isFinite(value) && value >= 0)) return;
+    await onSaveSettings({
+      agent_name: settingsForm.name.trim(),
+      daily_spend_limit_usd: daily,
+      per_transaction_limit_usd: perTx,
+      auto_approve_under_usd: auto,
+      blocked_vendors: settingsForm.blocked,
+      allowed_networks: settingsForm.networks,
+      allowed_tokens: settingsForm.tokens,
+      allowed_scopes: scopeEditor,
+    });
+    setSettingsDirty(false);
   };
 
   const hasAgent = Boolean(activeAgentId);
@@ -400,40 +486,142 @@ export default function AgentsPanel({
             </div>
           )
         ) : (
-          <div style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg)", padding: 14 }}>
-            <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>Developer verification tools</div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+          <>
+            <div style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg)", padding: 14, marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>Current Agent Settings</div>
+
+              <Field label="Agent Name" compact>
+                <input value={settingsForm.name} onChange={(event) => updateSettingsField("name", event.target.value)} style={inputStyle} />
+              </Field>
+
+              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
+                <Field label="Daily Spend Limit (USD)" compact>
+                  <input type="number" min={0} step={1} value={settingsForm.daily} onChange={(event) => updateSettingsField("daily", event.target.value)} style={inputStyle} />
+                </Field>
+                <Field label="Per-Txn Limit (USD)" compact>
+                  <input type="number" min={0} step={1} value={settingsForm.perTx} onChange={(event) => updateSettingsField("perTx", event.target.value)} style={inputStyle} />
+                </Field>
+              </div>
+
+              <Field label="Auto-Approve Under (USD)" compact>
+                <input type="number" min={0} step={1} value={settingsForm.auto} onChange={(event) => updateSettingsField("auto", event.target.value)} style={inputStyle} />
+              </Field>
+
+              <Field label="Allowed Networks" compact>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {["ethereum", "base", "solana", "polygon", "arbitrum"].map((network) => (
+                    <button
+                      key={network}
+                      type="button"
+                      onClick={() => toggleSettingsNetwork(network)}
+                      style={{
+                        ...subtleButton,
+                        height: 30,
+                        color: settingsForm.networks.includes(network) ? "var(--text-1)" : "var(--text-2)",
+                        background: settingsForm.networks.includes(network) ? "var(--bg-overlay)" : "transparent",
+                      }}
+                    >
+                      {network}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+
+              <Field label="Allowed Tokens" compact>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {["USDC", "USDT"].map((token) => (
+                    <button
+                      key={token}
+                      type="button"
+                      onClick={() => toggleSettingsToken(token)}
+                      style={{
+                        ...subtleButton,
+                        height: 30,
+                        color: settingsForm.tokens.includes(token) ? "var(--text-1)" : "var(--text-2)",
+                        background: settingsForm.tokens.includes(token) ? "var(--bg-overlay)" : "transparent",
+                      }}
+                    >
+                      {token}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+
+              <Field label="Blocked Vendors" compact>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    value={settingsForm.draftVendor}
+                    onChange={(event) => updateSettingsField("draftVendor", event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        addSettingsBlockedVendor();
+                      }
+                    }}
+                    placeholder="badvendor.example"
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                  <button type="button" onClick={addSettingsBlockedVendor} style={{ ...subtleButton, height: 38, color: "var(--text-1)" }}>
+                    Add
+                  </button>
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 9 }}>
+                  {settingsForm.blocked.map((vendor) => (
+                    <Chip key={vendor} text={vendor} onRemove={() => removeSettingsBlockedVendor(vendor)} />
+                  ))}
+                </div>
+              </Field>
+
               <button
                 type="button"
-                onClick={onRunSafeTest}
-                disabled={safeRunning}
+                onClick={handleSaveSettings}
+                disabled={!settingsDirty || settingsSaving}
                 style={{
-                  ...subtleButton,
-                  border: `1px solid ${safeRunning ? "var(--border)" : "var(--green)"}`,
-                  color: safeRunning ? "var(--text-3)" : "var(--green)",
-                  background: safeRunning ? "transparent" : "rgba(0,200,83,0.12)",
-                  cursor: safeRunning ? "not-allowed" : "pointer",
+                  ...primaryButton,
+                  width: "100%",
+                  opacity: !settingsDirty || settingsSaving ? 0.45 : 1,
+                  cursor: !settingsDirty || settingsSaving ? "not-allowed" : "pointer",
                 }}
               >
-                {safeRunning ? "running..." : "Run SAFE Test"}
-              </button>
-              <button
-                type="button"
-                onClick={onRunSuspiciousTest}
-                disabled={hitlRunning}
-                style={{
-                  ...subtleButton,
-                  border: `1px solid ${hitlRunning ? "var(--border)" : "var(--amber)"}`,
-                  color: hitlRunning ? "var(--text-3)" : "var(--amber)",
-                  background: hitlRunning ? "transparent" : "rgba(255,149,0,0.12)",
-                  cursor: hitlRunning ? "not-allowed" : "pointer",
-                }}
-              >
-                {hitlRunning ? "running..." : "Run HITL Test"}
+                {settingsSaving ? "Saving..." : "Save Agent Settings"}
               </button>
             </div>
-            <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>active_agent: {activeAgentId}</div>
-          </div>
+
+            <div style={{ border: "1px solid var(--border)", borderRadius: 6, background: "var(--bg)", padding: 14 }}>
+              <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>Developer verification tools</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                <button
+                  type="button"
+                  onClick={onRunSafeTest}
+                  disabled={safeRunning}
+                  style={{
+                    ...subtleButton,
+                    border: `1px solid ${safeRunning ? "var(--border)" : "var(--green)"}`,
+                    color: safeRunning ? "var(--text-3)" : "var(--green)",
+                    background: safeRunning ? "transparent" : "rgba(0,200,83,0.12)",
+                    cursor: safeRunning ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {safeRunning ? "running..." : "Run SAFE Test"}
+                </button>
+                <button
+                  type="button"
+                  onClick={onRunSuspiciousTest}
+                  disabled={hitlRunning}
+                  style={{
+                    ...subtleButton,
+                    border: `1px solid ${hitlRunning ? "var(--border)" : "var(--amber)"}`,
+                    color: hitlRunning ? "var(--text-3)" : "var(--amber)",
+                    background: hitlRunning ? "transparent" : "rgba(255,149,0,0.12)",
+                    cursor: hitlRunning ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {hitlRunning ? "running..." : "Run HITL Test"}
+                </button>
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>active_agent: {activeAgentId}</div>
+            </div>
+          </>
         )}
       </div>
 

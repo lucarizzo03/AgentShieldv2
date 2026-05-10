@@ -30,6 +30,7 @@ import {
   listAgents,
   resolveRequest,
   runDevTestRequest,
+  updateAgentSettings,
   updateAgentScopes,
 } from "./lib/api";
 import { logout } from "./lib/auth";
@@ -150,6 +151,7 @@ export default function App() {
   const [checklist, setChecklist] = useState(null);
   const [notes, setNotes] = useState({});
   const [scopesSaving, setScopesSaving] = useState(false);
+  const [settingsSaving, setSettingsSaving] = useState(false);
   const activeAgentRef = useRef("");
 
   const pendingCount = approvals.length;
@@ -477,6 +479,22 @@ export default function App() {
       toast(err.message || "Could not update scopes");
     } finally {
       setScopesSaving(false);
+    }
+  };
+
+  const saveAgentSettings = async (settingsPayload) => {
+    if (!activeAgentId) return;
+    try {
+      setSettingsSaving(true);
+      await updateAgentSettings(activeAgentId, settingsPayload);
+      const data = await listAgents();
+      setAgents(data.agents);
+      toast("Agent settings updated");
+      await refresh(activeAgentId, true);
+    } catch (err) {
+      toast(err.message || "Could not update agent settings");
+    } finally {
+      setSettingsSaving(false);
     }
   };
 
@@ -964,6 +982,8 @@ print(response.status_code, response.text)`;
               onGoToActivity={() => setPage("activity")}
               onSaveScopes={saveAgentScopes}
               scopesSaving={scopesSaving}
+              onSaveSettings={saveAgentSettings}
+              settingsSaving={settingsSaving}
             />
           ) : null}
 

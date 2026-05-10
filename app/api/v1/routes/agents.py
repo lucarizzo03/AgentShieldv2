@@ -10,6 +10,7 @@ from app.api.v1.schemas.agent import (
     AgentCreateResponse,
     AgentListResponse,
     AgentRotateHmacResponse,
+    AgentSettingsUpdateRequest,
     AgentScopesUpdateRequest,
 )
 from app.core.security import AuthContext, UserAuthContext, verify_agent_auth, verify_user_auth
@@ -19,6 +20,11 @@ from app.services.activity_log import append_agent_activity
 from app.services.user_identity import get_or_create_user
 
 router = APIRouter(tags=["agents"])
+
+
+def _cents_to_usd_setting(cents: int) -> int:
+    # 100_000_000 cents is our sentinel for "effectively unlimited".
+    return 0 if cents >= 100_000_000 else int(cents // 100)
 
 
 @router.post("/agents", response_model=AgentCreateResponse)
@@ -101,11 +107,61 @@ async def list_agents(
                 "agent_id": a.agent_id,
                 "display_name": a.display_name,
                 "status": a.status,
+                "daily_spend_limit_usd": _cents_to_usd_setting(a.daily_budget_limit_cents),
+                "per_transaction_limit_usd": _cents_to_usd_setting(a.per_txn_auto_approve_limit_cents),
+                "auto_approve_under_usd": int((a.hitl_required_over_cents or 0) // 100),
+                "blocked_vendors": a.blocked_vendors or [],
+                "allowed_networks": a.allowed_networks or [],
+                "allowed_tokens": a.allowed_stablecoins or [],
                 "allowed_scopes": a.allowed_scopes or [],
             }
             for a in agents
         ]
     }
+
+
+@router.patch("/agents/{agent_id}")
+async def update_agent_settings(
+    agent_id: str,
+    payload: AgentSettingsUpdateRequest,
+    auth: UserAuthContext = Depends(verify_user_auth),
+    session: Session = Depends(get_session),
+):
+    user = get_or_create_user(session, auth)
+    agent = session.exec(
+        select(Agent).where(Agent.agent_id == agent_id).where(Agent.owner_user_id == user.id)
+    ).first()
+    if not agent:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    now = datetime.now(timezone.utc)
+    agent.display_name = payload.agent_name
+    agent.daily_budget_limit_cents = payload.daily_spend_limit_usd * 100 if payload.daily_spend_limit_usd > 0 else 100_000_000
+    agent.per_txn_auto_approve_limit_cents = (
+        payload.per_transaction_limit_usd * 100 if payload.per_transaction_limit_usd > 0 else 100_000_000
+    )
+    agent.hitl_required_over_cents = payload.auto_approve_under_usd * 100
+    agent.blocked_vendors = payload.blocked_vendors
+    agent.allowed_networks = payload.allowed_networks or ["base"]
+    agent.allowed_stablecoins = payload.allowed_tokens or ["USDC"]
+    agent.allowed_scopes = payload.allowed_scopes
+    agent.updated_at = now
+
+    session.add(agent)
+    append_agent_activity(
+        session,
+        agent_id=agent.agent_id,
+        user_id=user.id,
+        event_type="AGENT_SETTINGS_UPDATED",
+        event_payload={
+            "display_name": agent.display_name,
+            "daily_spend_limit_usd": payload.daily_spend_limit_usd,
+            "per_transaction_limit_usd": payload.per_transaction_limit_usd,
+            "auto_approve_under_usd": payload.auto_approve_under_usd,
+        },
+    )
+    session.commit()
+    return {"agent_id": agent.agent_id, "updated_at": now}
 
 
 @router.patch("/agents/{agent_id}/scopes")
