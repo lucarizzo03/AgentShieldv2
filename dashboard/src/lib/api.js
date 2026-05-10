@@ -165,3 +165,12 @@ export async function updateAgentScopes(agentId, allowedScopes) {
   });
 }
 
+export async function updateAgentSettings(agentId, payload) {
+  return request(`/agents/${agentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    authMode: "user",
+  });
+}
+
