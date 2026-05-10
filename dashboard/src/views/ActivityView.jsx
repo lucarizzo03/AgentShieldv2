@@ -168,7 +168,7 @@ export default function ActivityView({ rows, onResolvePending, agents = [], acti
               <div className="mt-3 rounded border border-borderStrong bg-bgSecondary p-3 font-mono text-xs text-slate-300">
                 <div>Check A (Redis): {row.details.a}</div>
                 <div className="mt-1">Check B (Policy): {row.details.b}</div>
-                <div className="mt-1">Check C (SLM): {row.details.c}</div>
+                <div className="mt-1">Check C (Semantic): {row.details.c}</div>
               </div>
             ) : null}
           </div>

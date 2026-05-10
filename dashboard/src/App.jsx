@@ -799,7 +799,7 @@ print(response.status_code, response.text)`;
                             {r.details.redis.map(([k, s, v]) => <div key={k} style={{ display: "grid", gridTemplateColumns: "140px 20px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>{k}</span><span>{s}</span><span>{v}</span></div>)}
                             <div style={{ color: "var(--text-2)", fontSize: 11, margin: "6px 0 6px" }}>Check B · Policy</div>
                             {r.details.policy.map(([k, s, v]) => <div key={k} style={{ display: "grid", gridTemplateColumns: "140px 20px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>{k}</span><span>{s}</span><span>{v}</span></div>)}
-                            <div style={{ color: "var(--text-2)", fontSize: 11, margin: "6px 0 6px" }}>Check C · SLM</div>
+                            <div style={{ color: "var(--text-2)", fontSize: 11, margin: "6px 0 6px" }}>Check C · Semantic</div>
                             <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>alignment score</span><span>{r.details.slm.score}</span></div>
                             <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>verdict</span><span>{r.details.slm.verdict}</span></div>
                             <div style={{ display: "grid", gridTemplateColumns: "140px 1fr" }}><span style={{ color: "var(--text-2)" }}>reason</span><span>{r.details.slm.reason}</span></div>
@@ -874,7 +874,7 @@ print(response.status_code, response.text)`;
                         <div style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)", padding: 10, fontSize: 12 }}>
                           <div style={{ color: "var(--text-2)", marginBottom: 8 }}>SIGNALS</div>
                           <div style={{ display: "grid", gridTemplateColumns: "84px 1fr", marginBottom: 8 }}>
-                            <span style={{ color: "var(--text-2)" }}>SLM Score</span>
+                            <span style={{ color: "var(--text-2)" }}>Semantic Score</span>
                             <div>
                               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontFamily: "var(--font-mono)", fontSize: 12 }}>
                                 <span>{a.slmScore.toFixed(2)}</span><span>{a.slmVerdict}</span>

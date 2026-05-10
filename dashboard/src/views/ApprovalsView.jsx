@@ -90,7 +90,7 @@ export default function ApprovalsView({ cards, onDecision }) {
 
                 <div className="border-t border-borderStrong pt-3">
                   <div className="mb-2 text-xs uppercase text-slate-400">RISK SIGNALS</div>
-                  <RiskItem label={`SLM Alignment Score: ${card.slmScore} — ${card.slmLabel}`}>
+                  <RiskItem label={`Semantic Alignment Score: ${card.slmScore} — ${card.slmLabel}`}>
                     <p>{card.slmReason}</p>
                   </RiskItem>
                   <RiskItem label="Redis Check A">
