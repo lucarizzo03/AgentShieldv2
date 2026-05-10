@@ -227,6 +227,20 @@ _FIAT = dict(
     idempotency_key="test-fiat-safe-001",
 )
 
+_FIAT_EMPTY_CRYPTO_FIELDS = dict(
+    agent_id="test_agent_001",
+    declared_goal="Pay monthly software subscription invoice",
+    amount_cents=2_000,
+    currency="USD",
+    asset_type="FIAT",
+    stablecoin_symbol="",
+    network="",
+    destination_address="",
+    vendor_url_or_name="notion.so",
+    item_description="Monthly Notion Team subscription",
+    idempotency_key="test-fiat-safe-empty-crypto-001",
+)
+
 
 # ===========================================================================
 # TEST 1 — SAFE PATH
@@ -284,6 +298,16 @@ class TestSafePath:
         assert log is not None
         assert log.status == "APPROVED_EXECUTED"
         assert log.verdict == "SAFE"
+
+    def test_safe_fiat_accepts_empty_crypto_fields(self):
+        content, headers = _sign_agent(_FIAT_EMPTY_CRYPTO_FIELDS)
+        with TestClient(app) as client:
+            resp = client.post("/v1/spend-request", content=content, headers=headers)
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["status"] == "APPROVED_EXECUTED"
+        assert body["verdict"] == "SAFE"
 
     def test_idempotency_returns_cached_response_without_second_execution(self):
         content, headers = _sign_agent(_STABLECOIN)
