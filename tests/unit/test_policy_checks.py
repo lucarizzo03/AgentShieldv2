@@ -95,6 +95,21 @@ def test_stablecoin_destination_not_allowlisted_is_suspicious() -> None:
     assert "DESTINATION_NOT_ALLOWLISTED" in result.reasons
 
 
+def test_stablecoin_missing_destination_is_suspicious() -> None:
+    agent = _agent()
+    result = run_policy_checks(
+        agent=agent,
+        amount_cents=500,
+        vendor_url_or_name="legit.com",
+        asset_type="STABLECOIN",
+        stablecoin_symbol="USDC",
+        network="base",
+        destination_address=None,
+    )
+    assert result.suspicious is True
+    assert "DESTINATION_ADDRESS_MISSING" in result.reasons
+
+
 @pytest.mark.parametrize("symbol,network", [("USDT", "base"), ("USDC", "ethereum")])
 def test_stablecoin_chain_token_policy_hard_deny(symbol: str, network: str) -> None:
     agent = _agent()
