@@ -279,8 +279,10 @@ class TestSafePath:
         with Session(engine) as session:
             logs = session.exec(
                 select(SpendAuditLog).where(SpendAuditLog.agent_id == "test_agent_001")
+                .order_by(SpendAuditLog.created_at.asc())
             ).all()
-        assert len(logs) == 1, f"Expected 1 audit record, got {len(logs)}"
+        assert len(logs) == 2, f"Expected 2 audit records with replay marker, got {len(logs)}"
+        assert logs[-1].quantitative_result.get("idempotency_replay") is True
 
     def test_suspended_agent_is_rejected_before_checks(self):
         with Session(engine) as session:
