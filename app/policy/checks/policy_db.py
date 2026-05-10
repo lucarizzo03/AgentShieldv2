@@ -27,6 +27,12 @@ def _contains_vendor_match(blocked_vendors: list[str], vendor: str) -> bool:
             # broad substring matches (e.g. "pay" should not match "paywithlocus").
             return True
 
+        if candidate_host:
+            # For URL/domain candidates, do not fall back to free-text matching
+            # across the full URL/path because broad terms (e.g. "exchange")
+            # can create false positives on legitimate endpoints.
+            continue
+
         if candidate == entry:
             return True
 

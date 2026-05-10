@@ -63,6 +63,23 @@ def test_policy_vendor_does_not_block_on_broad_substring() -> None:
     assert "VENDOR_ALLOWED" in result.reasons
 
 
+def test_policy_vendor_url_path_word_does_not_trigger_blocklist() -> None:
+    agent = _agent()
+    agent.blocked_vendors = ["exchange"]
+    result = run_policy_checks(
+        agent=agent,
+        amount_cents=500,
+        vendor_url_or_name="https://abstract-exchange-rates.mpp.paywithlocus.com/abstract-exchange-rates/live",
+        asset_type="STABLECOIN",
+        stablecoin_symbol="USDC",
+        network="base",
+        destination_address="0xabc1234567890000",
+    )
+    assert result.hard_deny is False
+    assert "VENDOR_MATCHED_BLOCKLIST" not in result.reasons
+    assert "VENDOR_ALLOWED" in result.reasons
+
+
 def test_stablecoin_destination_not_allowlisted_is_suspicious() -> None:
     agent = _agent()
     result = run_policy_checks(

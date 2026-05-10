@@ -43,7 +43,8 @@ async def run_semantic_checks(
     settings = get_settings()
     check = CheckResult()
     if alignment_label == "MISMATCH":
-        check.hard_deny = True
+        # Semantic mismatch is ambiguous by policy and should route to HITL.
+        check.suspicious = True
         check.reasons.append("SEMANTIC_MISMATCH_HIGH")
     elif alignment_label == "WEAK":
         check.reasons.append("SEMANTIC_ALIGNMENT_WEAK")
