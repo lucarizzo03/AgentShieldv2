@@ -212,9 +212,10 @@ export default function App() {
         const slm = item.semantic_result || {};
         const gd = item.goal_drift_result || {};
         return {
-          id: item.request_id,
+          id: `${item.request_id}-${item.created_at}`,
           time: new Date(item.created_at).toLocaleTimeString("en-US", { hour12: false }),
           status: normalizeStatus(item.status),
+          isReplay: Boolean(item.idempotency_replay),
           agent: agentId,
           vendor: item.vendor_url_or_name,
           amount: item.amount_cents / 100,
@@ -754,7 +755,9 @@ print(response.status_code, response.text)`;
                 {rows.slice(0, 5).map((r) => (
                   <div key={r.id} className="cell" style={{ display: "grid", gridTemplateColumns: "100px 160px 1fr 100px 80px", alignItems: "center", height: 36, padding: "0 12px", fontSize: 12, minWidth: 0 }}>
                     <div style={{ fontFamily: "var(--font-mono)", color: "var(--text-2)" }}>{r.time}</div>
-                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.vendor}</div>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {r.vendor} {r.isReplay ? <span style={{ color: "var(--amber)" }}>[replay]</span> : null}
+                    </div>
                     <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-2)", fontStyle: "italic" }}>{r.goal}</div>
                     <div style={{ fontFamily: "var(--font-mono)", textAlign: "right" }}>${r.amount.toFixed(2)}</div>
                     <div style={{ color: "var(--text-3)", textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.network}</div>
@@ -811,6 +814,11 @@ print(response.status_code, response.text)`;
                             {r.status === "PENDING" ? <span className="dotPulse" /> : null}
                             {statusLabel(r.status)}
                           </span>
+                          {r.isReplay ? (
+                            <span style={{ marginLeft: 6, fontSize: 10, color: "var(--amber)", fontFamily: "var(--font-mono)" }}>
+                              REPLAY
+                            </span>
+                          ) : null}
                         </div>
                         <div className="ellipsis" style={{ color: "var(--text-2)" }}>{r.agent}</div>
                         <div className="ellipsis" style={{ color: "var(--text-1)", fontSize: 13 }}>{r.vendor}</div>

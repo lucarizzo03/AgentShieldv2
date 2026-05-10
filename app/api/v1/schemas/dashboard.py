@@ -54,6 +54,7 @@ class ActivityItem(BaseModel):
     policy_result: dict
     semantic_result: dict
     goal_drift_result: dict
+    idempotency_replay: bool = False
 
 
 class ActivityFeedResponse(BaseModel):
