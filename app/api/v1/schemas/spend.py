@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 
 class SpendRequest(BaseModel):
@@ -19,6 +19,13 @@ class SpendRequest(BaseModel):
     destination_address: str | None = Field(default=None, min_length=16, max_length=128)
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
     agent_callback_url: HttpUrl | None = None
+
+    @field_validator("stablecoin_symbol", "network", "destination_address", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, value):
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
     @model_validator(mode="after")
     def validate_asset_fields(self) -> "SpendRequest":
