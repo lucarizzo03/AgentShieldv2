@@ -148,7 +148,13 @@ async def spend_request(
     cached = await read_cached_idempotent_response(redis, payload.agent_id, payload.idempotency_key)
     if cached:
         response.status_code = int(cached.get("_http_status", 200))
-        return cached["body"]
+        replay_body = dict(cached["body"])
+        replay_body["idempotency_replay"] = True
+        replay_body["idempotency_note"] = "Returned cached decision for this idempotency key. No new evaluation was performed."
+        response.headers["x-idempotency-replay"] = "true"
+        if replay_body.get("request_id"):
+            response.headers["x-original-request-id"] = str(replay_body["request_id"])
+        return replay_body
 
     request_id = f"req_{uuid4().hex[:18]}"
     fingerprint = transaction_fingerprint(
@@ -233,6 +239,8 @@ async def spend_request(
             "currency": payload.currency,
             "reasons": tri.reasons,
             "agent_feedback": _build_agent_feedback(verdict="SAFE", reasons=tri.reasons, tri=tri),
+            "idempotency_replay": False,
+            "idempotency_note": None,
         }
         await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 200, "body": body})
         return body
@@ -289,6 +297,8 @@ async def spend_request(
             "reasons": tri.reasons,
             "next_action": "DO_NOT_RETRY",
             "agent_feedback": _build_agent_feedback(verdict="MALICIOUS", reasons=tri.reasons, tri=tri),
+            "idempotency_replay": False,
+            "idempotency_note": None,
         }
         response.status_code = status.HTTP_403_FORBIDDEN
         await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 403, "body": body})
@@ -405,6 +415,8 @@ async def spend_request(
         "status_poll_url": f"{settings.api_public_url}/v1/spend-request/{request_id}/status",
         "poll_interval_seconds": 5,
         "agent_feedback": _build_agent_feedback(verdict="SUSPICIOUS", reasons=tri.reasons, tri=tri),
+        "idempotency_replay": False,
+        "idempotency_note": None,
     }
     response.status_code = status.HTTP_202_ACCEPTED
     await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 202, "body": body})

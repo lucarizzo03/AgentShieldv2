@@ -417,6 +417,12 @@ export default function App() {
       destination_address: safeAddr,
       idempotency_key: `quick-safe-${Date.now()}`,
     })
+      .then((result) => {
+        if (result?.idempotency_replay) {
+          toast("⚠ Replay detected: cached AgentShield decision returned (no new evaluation).");
+        }
+        return result;
+      })
       .then(() => Promise.all([refresh(activeAgentId, true), refreshChecklist(activeAgentId)]))
       .then(() => toast("✓ SAFE test complete"))
       .catch((err) => toast(err.message || "SAFE test failed"))
@@ -441,6 +447,12 @@ export default function App() {
       destination_address: hitlAddr,
       idempotency_key: `quick-suspicious-${Date.now()}`,
     })
+      .then((result) => {
+        if (result?.idempotency_replay) {
+          toast("⚠ Replay detected: cached AgentShield decision returned (no new evaluation).");
+        }
+        return result;
+      })
       .then(() => Promise.all([refresh(activeAgentId, true), refreshChecklist(activeAgentId)]))
       .then(() => {
         setPage("approvals");

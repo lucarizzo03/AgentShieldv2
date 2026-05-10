@@ -271,6 +271,10 @@ class TestSafePath:
         assert r1.status_code == 200
         assert r2.status_code == 200
         assert r1.json()["request_id"] == r2.json()["request_id"]
+        assert r1.json()["idempotency_replay"] is False
+        assert r2.json()["idempotency_replay"] is True
+        assert r2.headers["x-idempotency-replay"] == "true"
+        assert r2.headers["x-original-request-id"] == r2.json()["request_id"]
 
         with Session(engine) as session:
             logs = session.exec(
