@@ -19,7 +19,6 @@ Three comprehensive scenario tests covering every decision path in AgentShield.
     • Network not in allowed list → NETWORK_NOT_ALLOWED
     • Stablecoin token not in allowed list → STABLECOIN_NOT_ALLOWED
     • Destination address on denylist → DESTINATION_DENYLISTED
-    • mocked MISMATCH label → SEMANTIC_MISMATCH_HIGH
     • All produce 403, BLOCKED audit log
 """
 import hashlib
@@ -500,11 +499,6 @@ class TestMaliciousPath:
         }
         self._assert_blocked(self._send(payload), "DESTINATION_DENYLISTED")
 
-    def test_semantic_mismatch_is_hard_denied(self):
-        _mock_semantic("MISMATCH", 90)
-        payload = {**_STABLECOIN, "idempotency_key": "mal-mismatch-001"}
-        self._assert_blocked(self._send(payload), "SEMANTIC_MISMATCH_HIGH")
-
     def test_multiple_hard_deny_conditions_all_present(self):
         payload = {
             **_STABLECOIN,
@@ -517,3 +511,41 @@ class TestMaliciousPath:
         reasons = resp.json()["reasons"]
         assert "VENDOR_MATCHED_BLOCKLIST" in reasons
         assert "NETWORK_NOT_ALLOWED" in reasons
+
+
+class TestSemanticMismatchHitlPath:
+
+    def setup_method(self):
+        _reset_db()
+        _seed_agent()
+        self.redis = FakeRedis()
+        app.dependency_overrides[get_redis] = lambda: self.redis
+        _mock_semantic("MISMATCH", 90)
+
+    def teardown_method(self):
+        app.dependency_overrides.clear()
+
+    def test_semantic_mismatch_routes_to_hitl(self):
+        payload = {**_STABLECOIN, "idempotency_key": "sem-mismatch-hitl-001"}
+        content, headers = _sign_agent(payload)
+        with TestClient(app) as client:
+            resp = client.post("/v1/spend-request", content=content, headers=headers)
+
+        assert resp.status_code == 202, resp.text
+        body = resp.json()
+        assert body["status"] == "PENDING_HITL"
+        assert body["verdict"] == "SUSPICIOUS"
+        assert "SEMANTIC_MISMATCH_HIGH" in body["reasons"]
+
+        with Session(engine) as session:
+            audit = session.exec(
+                select(SpendAuditLog).where(SpendAuditLog.request_id == body["request_id"])
+            ).first()
+            notif = session.exec(
+                select(DashboardNotification).where(DashboardNotification.request_id == body["request_id"])
+            ).first()
+        assert audit is not None
+        assert audit.status == "PENDING_HITL"
+        assert audit.verdict == "SUSPICIOUS"
+        assert notif is not None
+        assert notif.status == "OPEN"
