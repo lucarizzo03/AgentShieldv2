@@ -38,6 +38,7 @@ class SpendApprovedResponse(BaseModel):
     approved_amount_cents: int
     currency: str
     reasons: list[str]
+    agent_feedback: dict
 
 
 class SpendBlockedResponse(BaseModel):
@@ -47,6 +48,7 @@ class SpendBlockedResponse(BaseModel):
     block_code: str
     reasons: list[str]
     next_action: Literal["DO_NOT_RETRY"]
+    agent_feedback: dict
 
 
 class HitlStatePayload(BaseModel):
@@ -63,4 +65,5 @@ class SpendPendingResponse(BaseModel):
     hitl: HitlStatePayload
     reasons: list[str]
     next_action: Literal["AGENT_MUST_WAIT"]
+    agent_feedback: dict
 
