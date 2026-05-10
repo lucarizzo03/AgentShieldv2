@@ -48,6 +48,7 @@ def create_app() -> FastAPI:
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         request_id = request.headers.get("x-request-id", f"trace_{uuid4().hex[:12]}")
+        encoded_errors = jsonable_encoder(exc.errors())
         logged_request_id = None
 
         if request.method.upper() == "POST" and request.url.path == "/v1/spend-request":
@@ -71,7 +72,6 @@ def create_app() -> FastAPI:
                     with Session(engine) as session:
                         agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
                         if agent:
-                            validation_errors = jsonable_encoder(exc.errors())
                             logged_request_id = f"req_val_{uuid4().hex[:18]}"
                             session.add(
                                 SpendAuditLog(
@@ -87,7 +87,7 @@ def create_app() -> FastAPI:
                                     vendor_url_or_name=str(payload.get("vendor_url_or_name") or "unknown"),
                                     item_description=str(payload.get("item_description") or "Validation rejected"),
                                     quantitative_result={"validation_rejected": True},
-                                    policy_result={"validation_errors": validation_errors},
+                                    policy_result={"validation_errors": encoded_errors},
                                     semantic_result={},
                                     goal_drift_result={},
                                     verdict="MALICIOUS",
@@ -100,7 +100,7 @@ def create_app() -> FastAPI:
             status_code=422,
             content={
                 "message": "Request validation failed",
-                "detail": exc.errors(),
+                "detail": encoded_errors,
                 "request_id": logged_request_id,
                 "trace_id": request_id,
             },
