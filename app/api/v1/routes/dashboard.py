@@ -35,6 +35,21 @@ def _load_owned_agent(session: Session, *, auth_context: UserAuthContext, owner_
     return agent
 
 
+def _latest_transactions_today_utc(session: Session, *, agent_id: str) -> list[SpendAuditLog]:
+    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today_rows = session.exec(
+        select(SpendAuditLog)
+        .where(SpendAuditLog.agent_id == agent_id)
+        .where(SpendAuditLog.created_at >= day_start)
+    ).all()
+
+    latest: dict[str, SpendAuditLog] = {}
+    for row in today_rows:
+        if row.request_id not in latest or row.created_at > latest[row.request_id].created_at:
+            latest[row.request_id] = row
+    return sorted(latest.values(), key=lambda row: row.created_at, reverse=True)
+
+
 @router.get("/dashboard/agents/{agent_id}/notifications", response_model=DashboardNotificationListResponse)
 async def list_dashboard_notifications(
     agent_id: str,
@@ -151,26 +166,19 @@ async def update_dashboard_notification(
 @router.get("/dashboard/agents/{agent_id}/activity", response_model=ActivityFeedResponse)
 async def list_agent_activity(
     agent_id: str,
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=500, ge=1, le=2000),
     auth_context: UserAuthContext = Depends(verify_user_auth),
     session: Session = Depends(get_session),
 ):
     user = None if auth_context.agent_id else get_or_create_user(session, auth_context)
     _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
 
-    raw_rows = session.exec(
-        select(SpendAuditLog)
-        .where(SpendAuditLog.agent_id == agent_id)
-        .order_by(SpendAuditLog.created_at.desc())
-        .limit(limit * 2)
-    ).all()
-    _seen: dict[str, SpendAuditLog] = {}
-    for r in raw_rows:
-        if r.request_id not in _seen or r.created_at > _seen[r.request_id].created_at:
-            _seen[r.request_id] = r
-    rows = sorted(_seen.values(), key=lambda r: r.created_at, reverse=True)[:limit]
+    latest_today = _latest_transactions_today_utc(session, agent_id=agent_id)
+    rows = latest_today[:limit]
     return {
         "agent_id": agent_id,
+        "total_transactions_today": len(latest_today),
+        "count_mode": "today_utc",
         "activity": [
             {
                 "request_id": row.request_id,
@@ -188,9 +196,10 @@ async def list_agent_activity(
                 )(((row.semantic_result or {}).get("reason_codes") or [None])[0])
                 if isinstance(row.semantic_result, dict)
                 else None,
-                "quantitative_result": row.quantitative_result,
-                "policy_result": row.policy_result,
-                "semantic_result": row.semantic_result,
+                "quantitative_result": row.quantitative_result or {},
+                "policy_result": row.policy_result or {},
+                "semantic_result": row.semantic_result or {},
+                "goal_drift_result": row.goal_drift_result or {},
             }
             for row in rows
         ],
@@ -206,18 +215,7 @@ async def get_dashboard_stats(
     user = None if auth_context.agent_id else get_or_create_user(session, auth_context)
     _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
 
-    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    today_rows = session.exec(
-        select(SpendAuditLog)
-        .where(SpendAuditLog.agent_id == agent_id)
-        .where(SpendAuditLog.created_at >= day_start)
-    ).all()
-
-    latest: dict[str, SpendAuditLog] = {}
-    for r in today_rows:
-        if r.request_id not in latest or r.created_at > latest[r.request_id].created_at:
-            latest[r.request_id] = r
-    unique = list(latest.values())
+    unique = _latest_transactions_today_utc(session, agent_id=agent_id)
 
     blocked = len([r for r in unique if r.status in {"BLOCKED", "DENIED_BY_HUMAN"}])
     approved = len([r for r in unique if r.status in {"APPROVED_EXECUTED", "APPROVED_BY_HUMAN_EXECUTED"}])

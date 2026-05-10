@@ -1,7 +1,7 @@
 import hashlib
 import hmac as _hmac
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, SQLModel, select
@@ -12,6 +12,7 @@ from app.db.redis import get_redis
 from app.main import app
 from app.models import Agent
 from app.models.dashboard_notification import DashboardNotification
+from app.models.spend_audit_log import SpendAuditLog
 from app.services.slm.client import AnthropicSemanticClient
 from tests.integration.test_spend_hitl_flow import FakeRedis
 
@@ -115,5 +116,122 @@ def test_dashboard_notification_list_and_ack() -> None:
         notif = session.exec(select(DashboardNotification)).first()
         assert notif is not None
         assert notif.status == "ACKED"
+
+    app.dependency_overrides.clear()
+
+
+def test_dashboard_stats_and_activity_are_aligned_for_today() -> None:
+    _reset_db()
+    _seed_agent()
+    app.dependency_overrides[verify_user_auth] = _mock_user_auth
+
+    now = datetime.now(timezone.utc)
+    yesterday = now - timedelta(days=1)
+    with Session(engine) as session:
+        session.add(
+            SpendAuditLog(
+                request_id="req_today_1",
+                agent_id="agent_dash",
+                declared_goal="Goal",
+                amount_cents=1000,
+                currency="USD",
+                asset_type="STABLECOIN",
+                stablecoin_symbol="USDC",
+                network="base",
+                destination_address="0x1",
+                vendor_url_or_name="vendor.one",
+                item_description="item",
+                quantitative_result={},
+                policy_result={},
+                semantic_result={},
+                goal_drift_result={},
+                verdict="SAFE",
+                status="APPROVED_EXECUTED",
+                created_at=now,
+            )
+        )
+        # Same request updated later in time; should still count as one unique request.
+        session.add(
+            SpendAuditLog(
+                request_id="req_today_1",
+                agent_id="agent_dash",
+                declared_goal="Goal",
+                amount_cents=1000,
+                currency="USD",
+                asset_type="STABLECOIN",
+                stablecoin_symbol="USDC",
+                network="base",
+                destination_address="0x1",
+                vendor_url_or_name="vendor.one",
+                item_description="item",
+                quantitative_result={},
+                policy_result={},
+                semantic_result={},
+                goal_drift_result={},
+                verdict="SUSPICIOUS",
+                status="PENDING_HITL",
+                created_at=now + timedelta(seconds=10),
+            )
+        )
+        session.add(
+            SpendAuditLog(
+                request_id="req_today_2",
+                agent_id="agent_dash",
+                declared_goal="Goal",
+                amount_cents=1200,
+                currency="USD",
+                asset_type="STABLECOIN",
+                stablecoin_symbol="USDC",
+                network="base",
+                destination_address="0x2",
+                vendor_url_or_name="vendor.two",
+                item_description="item",
+                quantitative_result={},
+                policy_result={},
+                semantic_result={},
+                goal_drift_result={},
+                verdict="MALICIOUS",
+                status="BLOCKED",
+                created_at=now + timedelta(seconds=20),
+            )
+        )
+        # Yesterday row should not count in today's metrics/activity.
+        session.add(
+            SpendAuditLog(
+                request_id="req_yesterday",
+                agent_id="agent_dash",
+                declared_goal="Goal",
+                amount_cents=1400,
+                currency="USD",
+                asset_type="STABLECOIN",
+                stablecoin_symbol="USDC",
+                network="base",
+                destination_address="0x3",
+                vendor_url_or_name="vendor.three",
+                item_description="item",
+                quantitative_result={},
+                policy_result={},
+                semantic_result={},
+                goal_drift_result={},
+                verdict="SAFE",
+                status="APPROVED_EXECUTED",
+                created_at=yesterday,
+            )
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        stats_resp = client.get("/v1/dashboard/agents/agent_dash/stats", headers={"Authorization": "Bearer mock-token"})
+        activity_resp = client.get("/v1/dashboard/agents/agent_dash/activity", headers={"Authorization": "Bearer mock-token"})
+
+    assert stats_resp.status_code == 200
+    assert activity_resp.status_code == 200
+    stats_json = stats_resp.json()
+    activity_json = activity_resp.json()
+
+    assert stats_json["total_transactions_today"] == 2
+    assert activity_json["total_transactions_today"] == 2
+    assert len(activity_json["activity"]) == 2
+    assert activity_json["count_mode"] == "today_utc"
 
     app.dependency_overrides.clear()

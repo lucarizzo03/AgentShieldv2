@@ -101,6 +101,7 @@ async def list_agents(
                 "agent_id": a.agent_id,
                 "display_name": a.display_name,
                 "status": a.status,
+                "allowed_scopes": a.allowed_scopes or [],
             }
             for a in agents
         ]
