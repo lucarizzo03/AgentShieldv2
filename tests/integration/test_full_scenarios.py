@@ -249,6 +249,9 @@ class TestSafePath:
         assert "BUDGET_WITHIN_LIMIT" in reasons
         assert "VENDOR_ALLOWED" in reasons
         assert "SEMANTIC_ALIGNMENT_HIGH" in reasons
+        assert "agent_feedback" in body
+        assert body["agent_feedback"]["verdict_summary"]["safe_to_execute"] is True
+        assert "check_a_quantitative" in body["agent_feedback"]["checks"]
 
         with Session(engine) as session:
             log = session.exec(
@@ -328,6 +331,8 @@ class TestSuspiciousHitlPath:
         assert body["verdict"] == "SUSPICIOUS"
         assert body["next_action"] == "AGENT_MUST_WAIT"
         assert "AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD" in body["reasons"]
+        assert "agent_feedback" in body
+        assert body["agent_feedback"]["verdict_summary"]["human_review_required"] is True
 
         request_id = body["request_id"]
         with Session(engine) as session:
@@ -447,6 +452,8 @@ class TestMaliciousPath:
         assert body["verdict"] == "MALICIOUS"
         assert body["next_action"] == "DO_NOT_RETRY"
         assert expected_reason in body["reasons"]
+        assert "agent_feedback" in body
+        assert body["agent_feedback"]["verdict_summary"]["hard_deny_detected"] is True
         with Session(engine) as session:
             log = session.exec(
                 select(SpendAuditLog).where(SpendAuditLog.request_id == body["request_id"])

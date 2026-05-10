@@ -40,9 +40,89 @@ _HIGH_RISK_REASONS = {
     "GOAL_DRIFT_EVAL_UNAVAILABLE",
 }
 
+_CHECK_REASON_GROUPS = {
+    "check_a_quantitative": {
+        "BUDGET_DAILY_LIMIT_EXCEEDED",
+        "BUDGET_WITHIN_LIMIT",
+        "LOOP_PATTERN_DETECTED",
+        "NO_LOOP_PATTERN",
+        "DESTINATION_BURST_DETECTED",
+    },
+    "check_b_policy": {
+        "VENDOR_MATCHED_BLOCKLIST",
+        "VENDOR_DOMAIN_PHISHING_PATTERN",
+        "VENDOR_ALLOWED",
+        "AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD",
+        "AMOUNT_WITHIN_AUTO_APPROVAL_THRESHOLD",
+        "STABLECOIN_NOT_ALLOWED",
+        "NETWORK_NOT_ALLOWED",
+        "DESTINATION_DENYLISTED",
+        "DESTINATION_NOT_ALLOWLISTED",
+    },
+    "check_c_semantic": {
+        "SEMANTIC_MISMATCH_HIGH",
+        "SEMANTIC_ALIGNMENT_WEAK",
+        "SEMANTIC_ALIGNMENT_HIGH",
+    },
+    "check_d_goal_drift": {
+        "GOAL_DRIFT_DETECTED",
+        "GOAL_WITHIN_SCOPE",
+        "GOAL_DRIFT_SKIPPED_NO_SCOPES",
+        "GOAL_DRIFT_EVAL_UNAVAILABLE",
+    },
+}
+
 
 def _is_high_risk_suspicious(reasons: list[str]) -> bool:
     return bool(_HIGH_RISK_REASONS & set(reasons))
+
+
+def _build_agent_feedback(*, verdict: str, reasons: list[str], tri) -> dict:
+    per_check_reasons = {
+        check_name: [reason for reason in reasons if reason in known_reasons]
+        for check_name, known_reasons in _CHECK_REASON_GROUPS.items()
+    }
+    suspicious_hits = [reason for reason in reasons if reason in _HIGH_RISK_REASONS]
+    return {
+        "verdict_summary": {
+            "verdict": verdict,
+            "hard_deny_detected": verdict == "MALICIOUS",
+            "human_review_required": verdict == "SUSPICIOUS",
+            "safe_to_execute": verdict == "SAFE",
+        },
+        "picked_up": {
+            "reasons": reasons,
+            "high_risk_flags": suspicious_hits,
+            "checks_triggered": [check for check, check_reasons in per_check_reasons.items() if check_reasons],
+        },
+        "checks": {
+            "check_a_quantitative": {
+                "reasons": per_check_reasons["check_a_quantitative"],
+                "context": tri.quantitative_result,
+            },
+            "check_b_policy": {
+                "reasons": per_check_reasons["check_b_policy"],
+                "context": tri.policy_result,
+            },
+            "check_c_semantic": {
+                "reasons": per_check_reasons["check_c_semantic"],
+                "context": tri.semantic_result,
+            },
+            "check_d_goal_drift": {
+                "reasons": per_check_reasons["check_d_goal_drift"],
+                "context": tri.goal_drift_result,
+            },
+        },
+        "reason_counts": {
+            "total": len(reasons),
+            "matched_known_reasons": len(
+                [reason for reason in reasons if any(reason in group for group in _CHECK_REASON_GROUPS.values())]
+            ),
+            "unclassified": len(
+                [reason for reason in reasons if not any(reason in group for group in _CHECK_REASON_GROUPS.values())]
+            ),
+        },
+    }
 
 
 @router.post("/spend-request")
@@ -152,6 +232,7 @@ async def spend_request(
             "approved_amount_cents": payload.amount_cents,
             "currency": payload.currency,
             "reasons": tri.reasons,
+            "agent_feedback": _build_agent_feedback(verdict="SAFE", reasons=tri.reasons, tri=tri),
         }
         await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 200, "body": body})
         return body
@@ -207,6 +288,7 @@ async def spend_request(
             "block_code": "POLICY_HARD_DENY",
             "reasons": tri.reasons,
             "next_action": "DO_NOT_RETRY",
+            "agent_feedback": _build_agent_feedback(verdict="MALICIOUS", reasons=tri.reasons, tri=tri),
         }
         response.status_code = status.HTTP_403_FORBIDDEN
         await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 403, "body": body})
@@ -322,6 +404,7 @@ async def spend_request(
         "next_action": "AGENT_MUST_WAIT",
         "status_poll_url": f"{settings.api_public_url}/v1/spend-request/{request_id}/status",
         "poll_interval_seconds": 5,
+        "agent_feedback": _build_agent_feedback(verdict="SUSPICIOUS", reasons=tri.reasons, tri=tri),
     }
     response.status_code = status.HTTP_202_ACCEPTED
     await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 202, "body": body})
