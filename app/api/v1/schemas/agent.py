@@ -41,6 +41,7 @@ class AgentSummary(BaseModel):
     agent_id: str
     display_name: str
     status: str
+    allowed_scopes: list[str] = Field(default_factory=list)
 
 
 class AgentListResponse(BaseModel):

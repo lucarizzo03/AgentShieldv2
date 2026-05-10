@@ -64,7 +64,7 @@ export async function getDashboardStats(agentId) {
 }
 
 export async function getActivity(agentId) {
-  return request(`/dashboard/agents/${agentId}/activity?limit=100`, {
+  return request(`/dashboard/agents/${agentId}/activity`, {
     authMode: "user",
   });
 }

@@ -181,8 +181,19 @@ class AnthropicSemanticClient:
                 if "within_scope" in parsed:
                     return parsed
             logger.warning("Goal scope check returned unexpected format: %s", raw[:200])
-            return {"within_scope": True, "matched_scope": None, "confidence": 0, "reason": "SLM_UNEXPECTED_RESPONSE"}
+            return {
+                "within_scope": False,
+                "matched_scope": None,
+                "confidence": 0,
+                "reason": "SLM_UNEXPECTED_RESPONSE",
+                "evaluation_error": True,
+            }
         except Exception:
             logger.warning("Goal scope check failed", exc_info=True)
-            # Fail open — don't block on API errors
-            return {"within_scope": True, "matched_scope": None, "confidence": 0, "reason": "SLM_UNAVAILABLE"}
+            return {
+                "within_scope": False,
+                "matched_scope": None,
+                "confidence": 0,
+                "reason": "SLM_UNAVAILABLE",
+                "evaluation_error": True,
+            }

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import AgentsPanel from "./components/AgentsPanel";
 import DocsPage from "./DocsPage";
 import {
   Activity,
@@ -21,21 +22,15 @@ import {
   YAxis,
 } from "recharts";
 import {
-  bootstrapOnboarding,
   createAgent as createAgentRequest,
   getActivity,
-  getAgent,
   getDashboardStats,
   getNotifications,
   getOnboardingChecklist,
   listAgents,
   resolveRequest,
   runDevTestRequest,
-  startPhoneVerification,
-  submitSpendRequest,
   updateAgentScopes,
-  updateHitlPreferences,
-  verifyPhone,
 } from "./lib/api";
 import { logout } from "./lib/auth";
 
@@ -119,8 +114,8 @@ function Toasts({ toasts }) {
 export default function App() {
   const [agents, setAgents] = useState([]);
   const [activeAgentId, setActiveAgentId] = useState("");
-  const [allAgents, setAllAgents] = useState([]);
   const [stats, setStats] = useState({ total: 0, blocked: 0, pending: 0, approved: 0 });
+  const [activityMeta, setActivityMeta] = useState({ totalToday: 0, countMode: "today_utc" });
   const [rows, setRows] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -149,20 +144,13 @@ export default function App() {
     draftVendor: "",
     networks: ["base"],
     tokens: ["USDC"],
-  });
-  const [quickstartForm, setQuickstartForm] = useState({
-    userName: "",
-    email: "",
-    agentName: "",
+    scopes: [],
+    draftScope: "",
   });
   const [checklist, setChecklist] = useState(null);
   const [notes, setNotes] = useState({});
-  const [agentProfile, setAgentProfile] = useState(null);
-  const [phoneInput, setPhoneInput] = useState("");
-  const [otpInput, setOtpInput] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
-  const [smsToggle, setSmsToggle] = useState(false);
-  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [scopesSaving, setScopesSaving] = useState(false);
+  const activeAgentRef = useRef("");
 
   const pendingCount = approvals.length;
 
@@ -205,11 +193,18 @@ export default function App() {
         getActivity(agentId),
         getNotifications(agentId),
       ]);
+      if (agentId !== activeAgentRef.current) {
+        return;
+      }
       setStats({
-        total: statsResp.total_transactions_today,
+        total: activityResp.total_transactions_today ?? statsResp.total_transactions_today,
         blocked: statsResp.blocked,
         pending: statsResp.pending_approval,
         approved: statsResp.auto_approved,
+      });
+      setActivityMeta({
+        totalToday: activityResp.total_transactions_today ?? 0,
+        countMode: activityResp.count_mode || "today_utc",
       });
       const newRows = activityResp.activity.map((item) => {
         const slm = item.semantic_result || {};
@@ -300,13 +295,13 @@ export default function App() {
       try {
         const data = await listAgents();
         setAgents(data.agents);
-        setAllAgents(data.agents);
         if (data.agents.length > 0) {
           const storedMap = (() => { try { return JSON.parse(localStorage.getItem("agentshield_creds_map") || "{}"); } catch { return {}; } })();
           const match = Object.keys(storedMap).find((id) => data.agents.find((a) => a.agent_id === id));
           const first = match || data.agents[0].agent_id;
+          activeAgentRef.current = first;
           setActiveAgentId(first);
-          setPage("integration");
+          setPage("agents");
           await refresh(first, true);
           await refreshChecklist(first);
         } else {
@@ -323,21 +318,12 @@ export default function App() {
 
   useEffect(() => {
     if (!activeAgentId) return;
+    activeAgentRef.current = activeAgentId;
     const timer = setInterval(() => {
       refresh(activeAgentId).catch(() => {});
     }, 2000);
     return () => clearInterval(timer);
   }, [activeAgentId, refresh, refreshChecklist]);
-
-  useEffect(() => {
-    if (!activeAgentId) return;
-    getAgent(activeAgentId).then((a) => {
-      if (!a) return;
-      setAgentProfile(a);
-      setSmsToggle(a.hitl_sms_fallback_high_risk || false);
-      setPhoneInput(a.hitl_phone_number || "");
-    }).catch(() => {});
-  }, [activeAgentId]);
 
   const resolve = (approvalId, decision) => {
     const ap = approvals.find((a) => String(a.id) === String(approvalId));
@@ -378,6 +364,7 @@ export default function App() {
       asset_type: form.asset,
       allowed_networks: form.networks,
       allowed_tokens: form.tokens,
+      allowed_scopes: form.scopes,
     })
       .then(async (res) => {
         setCredsMap((prev) => {
@@ -388,48 +375,26 @@ export default function App() {
         setShowSuccess(true);
         const data = await listAgents();
         setAgents(data.agents);
-        setAllAgents(data.agents);
+        activeAgentRef.current = res.agent_id;
         setActiveAgentId(res.agent_id);
+        setShowNewAgentForm(false);
+        setForm({
+          name: "",
+          daily: "",
+          perTx: "",
+          auto: "",
+          asset: "STABLECOIN",
+          blocked: [],
+          draftVendor: "",
+          networks: ["base"],
+          tokens: ["USDC"],
+          scopes: [],
+          draftScope: "",
+        });
         await refresh(res.agent_id, true);
         await refreshChecklist(res.agent_id);
       })
       .catch((err) => toast(err.message || "Create agent failed"));
-  };
-
-  const runQuickstartBootstrap = (e) => {
-    e.preventDefault();
-    if (!quickstartForm.userName || !quickstartForm.email || !quickstartForm.agentName) {
-      toast("Enter name, email, and agent name");
-      return;
-    }
-    bootstrapOnboarding({
-      user_name: quickstartForm.userName,
-      email: quickstartForm.email,
-      agent_name: quickstartForm.agentName,
-      daily_spend_limit_usd: 500,
-      per_transaction_limit_usd: 100,
-      auto_approve_under_usd: 25,
-      allowed_networks: ["base"],
-      allowed_tokens: ["USDC"],
-      blocked_vendors: ["badvendor.example"],
-    })
-      .then(async (res) => {
-        setCredsMap((prev) => {
-          const next = { ...prev, [res.agent_id]: res.hmac_secret };
-          localStorage.setItem("agentshield_creds_map", JSON.stringify(next));
-          return next;
-        });
-        setShowSuccess(true);
-        setShowNewAgentForm(false);
-        const data = await listAgents();
-        setAgents(data.agents);
-        setAllAgents(data.agents);
-        setActiveAgentId(res.agent_id);
-        await refresh(res.agent_id, true);
-        await refreshChecklist(res.agent_id);
-        toast("Agent created");
-      })
-      .catch((err) => toast(err.message || "Bootstrap failed"));
   };
 
   const runSafeTest = () => {
@@ -489,6 +454,33 @@ export default function App() {
     setForm((p) => ({ ...p, blocked: Array.from(new Set([...p.blocked, v])), draftVendor: "" }));
   };
 
+  const addScope = () => {
+    const scope = form.draftScope.trim();
+    if (!scope) return;
+    setForm((p) => ({ ...p, scopes: Array.from(new Set([...p.scopes, scope])), draftScope: "" }));
+  };
+
+  const removeScope = (scope) => {
+    setForm((p) => ({ ...p, scopes: p.scopes.filter((item) => item !== scope) }));
+  };
+
+  const saveAgentScopes = async (scopes) => {
+    if (!activeAgentId) return;
+    try {
+      setScopesSaving(true);
+      await updateAgentScopes(activeAgentId, scopes);
+      const data = await listAgents();
+      setAgents(data.agents);
+      toast("Goal scopes updated");
+      await refresh(activeAgentId, true);
+    } catch (err) {
+      toast(err.message || "Could not update scopes");
+    } finally {
+      setScopesSaving(false);
+    }
+  };
+
+  const activeAgent = agents.find((agent) => agent.agent_id === activeAgentId) || null;
   const effectiveAgentId = activeAgentId || "agt_your_agent_id";
   const activeHmac = credsMap[activeAgentId] || "";
   const effectiveSecret = secretReveal ? (activeHmac || "<your-hmac-secret>") : "<your-hmac-secret>";
@@ -634,6 +626,7 @@ print(response.status_code, response.text)`;
               <select
                 value={activeAgentId}
                 onChange={(e) => {
+                  activeAgentRef.current = e.target.value;
                   setActiveAgentId(e.target.value);
                   refresh(e.target.value, true).catch(() => {});
                   refreshChecklist(e.target.value).catch(() => {});
@@ -685,7 +678,7 @@ print(response.status_code, response.text)`;
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
                 {[
-                  ["transactions", stats.total, "today", "var(--text-1)"],
+                  ["transactions", stats.total, activityMeta.countMode === "today_utc" ? "today (UTC)" : "current scope", "var(--text-1)"],
                   ["blocked", stats.blocked, "", "var(--red)"],
                   ["pending", stats.pending, "", "var(--amber)"],
                   ["approved", stats.approved, "", "var(--green)"],
@@ -763,6 +756,9 @@ print(response.status_code, response.text)`;
                       {f}
                     </button>
                   ))}
+                </div>
+                <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
+                  {activityMeta.countMode === "today_utc" ? "today_utc" : activityMeta.countMode} · total {activityMeta.totalToday}
                 </div>
               </div>
               <div style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
@@ -944,176 +940,31 @@ print(response.status_code, response.text)`;
           ) : null}
 
           {page === "agents" ? (
-            <div style={{ maxWidth: 560 }}>
-              {activeAgentId && activeHmac && !showNewAgentForm ? (
-                <>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                    <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)" }}>Active Agent</div>
-                    <button type="button" onClick={() => { setShowNewAgentForm(true); setShowSuccess(false); }} style={{ height: 28, border: "1px solid var(--border)", background: "transparent", color: "var(--text-2)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}>+ New Agent</button>
-                  </div>
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>agent_id</div>
-                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                      <span>{activeAgentId}</span>
-                      <button onClick={() => navigator.clipboard.writeText(activeAgentId)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
-                    </div>
-                  </div>
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>hmac_secret</div>
-                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                      <span>{secretReveal ? activeHmac : "•••••••••••••••••••••••••••"}</span>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={() => navigator.clipboard.writeText(activeHmac)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
-                        <button onClick={() => setSecretReveal(p => !p)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[{secretReveal ? "hide" : "reveal"}]</button>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : null}
-              {(!activeAgentId || !activeHmac || showNewAgentForm) ? (
-                <>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                    <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)" }}>New Agent</div>
-                    {activeHmac && <button type="button" onClick={() => { setShowNewAgentForm(false); setShowSuccess(false); }} style={{ height: 28, border: "none", background: "transparent", color: "var(--text-2)", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}>← Back</button>}
-                  </div>
-              {!showSuccess ? (
-                <form onSubmit={handleCreateAgent}>
-                  {[
-                    ["Agent Name", "name", "my-booking-agent", false, null],
-                    ["Daily Spend Limit", "daily", "500", true, "Max total USD per day. Set 0 for no limit."],
-                    ["Per-Transaction Limit", "perTx", "200", true, "Max USD per transaction. Set 0 for no limit."],
-                    ["Auto-Approve Under", "auto", "25", true, "Transactions below this USD amount skip HITL review. Set 0 to require review for all."],
-                  ].map(([label, key, ph, numeric, hint]) => (
-                    <div key={key} style={{ marginBottom: 12 }}>
-                      <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                        {label}{numeric ? <span style={{ color: "var(--text-3)", textTransform: "none", marginLeft: 6 }}>USD</span> : null}
-                      </label>
-                      {hint ? <div style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 4 }}>{hint}</div> : null}
-                      <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-                        {numeric ? <span style={{ position: "absolute", left: 10, fontSize: 13, color: "var(--text-2)", fontFamily: "var(--font-mono)", pointerEvents: "none" }}>$</span> : null}
-                        <input
-                          type={numeric ? "number" : "text"}
-                          min={numeric ? 0 : undefined}
-                          step={numeric ? 1 : undefined}
-                          value={form[key]}
-                          placeholder={ph}
-                          onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
-                          style={{ width: "100%", height: 36, background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-1)", borderRadius: 4, paddingLeft: numeric ? 22 : 12, paddingRight: 12, fontSize: 13, fontFamily: "var(--font-mono)" }}
-                          className="fast"
-                        />
-                      </div>
-                    </div>
-                  ))}
-                  <div style={{ marginBottom: 12 }}>
-                    <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Asset Type</label>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      {["STABLECOIN", "FIAT"].map((asset) => (
-                        <button key={asset} type="button" onClick={() => setForm((p) => ({ ...p, asset }))} style={{ height: 30, padding: "0 10px", border: "1px solid var(--border)", background: form.asset === asset ? "var(--bg-overlay)" : "var(--bg-raised)", color: "var(--text-1)", borderRadius: 4, fontSize: 12, fontFamily: "var(--font-mono)" }}>
-                          {asset}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {form.asset === "STABLECOIN" ? (
-                    <>
-                      <div style={{ marginBottom: 12 }}>
-                        <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Networks</label>
-                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12, color: "var(--text-2)" }}>
-                          {["ethereum", "base", "solana", "polygon", "arbitrum"].map((n) => (
-                            <label key={n} style={{ display: "inline-flex", gap: 6, alignItems: "center", textTransform: "lowercase" }}>
-                              <input type="checkbox" checked={form.networks.includes(n)} onChange={() => setForm((p) => ({ ...p, networks: p.networks.includes(n) ? p.networks.filter((x) => x !== n) : [...p.networks, n] }))} />
-                              {n}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                      <div style={{ marginBottom: 12 }}>
-                        <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Tokens</label>
-                        <div style={{ display: "flex", gap: 8 }}>
-                          {["USDC", "USDT"].map((t) => (
-                            <button key={t} type="button" onClick={() => setForm((p) => ({ ...p, tokens: p.tokens.includes(t) ? p.tokens.filter((x) => x !== t) : [...p.tokens, t] }))} style={{ height: 28, padding: "0 10px", border: "1px solid var(--border)", background: form.tokens.includes(t) ? "var(--bg-overlay)" : "var(--bg-raised)", color: "var(--text-1)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 11 }}>
-                              {t}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  ) : null}
-                  <div style={{ marginBottom: 12 }}>
-                    <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Blocked Vendors</label>
-                    <input
-                      value={form.draftVendor}
-                      onChange={(e) => setForm((p) => ({ ...p, draftVendor: e.target.value }))}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addBlockedVendor(); } }}
-                      style={{ width: "100%", height: 36, background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-1)", borderRadius: 4, padding: "0 12px", fontSize: 13, fontFamily: "var(--font-mono)" }}
-                      className="fast"
-                    />
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-                      {form.blocked.map((v) => (
-                        <button key={v} type="button" onClick={() => setForm((p) => ({ ...p, blocked: p.blocked.filter((x) => x !== v) }))} style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-2)", borderRadius: 4, fontSize: 11, fontFamily: "var(--font-mono)", padding: "3px 6px" }}>
-                          {v} ×
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <button type="submit" style={{ height: 36, padding: "0 16px", border: "1px solid var(--text-1)", background: "var(--text-1)", color: "var(--bg)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
-                    Create Agent
-                  </button>
-                </form>
-              ) : (
-                <div>
-                  <div style={{ fontSize: 14, color: "var(--text-1)", fontFamily: "var(--font-mono)", fontWeight: 500, marginBottom: 10 }}>Agent created.</div>
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>agent_id</div>
-                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                      <span>{activeAgentId}</span>
-                      <button onClick={() => navigator.clipboard.writeText(activeAgentId)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
-                    </div>
-                  </div>
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>hmac_secret</div>
-                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                      <span>{secretReveal ? activeHmac : "•••••••••••••••••••••••••••"}</span>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={() => navigator.clipboard.writeText(activeHmac)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
-                        <button onClick={() => setSecretReveal((p) => !p)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[reveal]</button>
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Integration</div>
-                  <div style={{ border: "1px solid var(--border)", background: "var(--bg-overlay)", padding: "8px 10px", fontFamily: "var(--font-mono)", fontSize: 12, position: "relative" }}>
-                    <button onClick={() => navigator.clipboard.writeText(`curl -X POST https://api.agentshield.com/v1/spend-request -H "x-agent-id: ${activeAgentId}" -H "x-signature: <hmac>" -d '{"declared_goal":"...","amount_cents":4900}'`)} style={{ position: "absolute", right: 8, top: 8, border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
-                    <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{`curl -X POST \\
-  https://api.agentshield.com/v1/spend-request \\
-  -H "x-agent-id: ${activeAgentId}" \\
-  -H "x-signature: <hmac>" \\
-  -d '{"declared_goal":"...","amount_cents":4900}'`}</pre>
-                  </div>
-                  <button onClick={() => setPage("activity")} style={{ marginTop: 10, border: "none", background: "transparent", color: "var(--text-2)", fontSize: 12, cursor: "pointer" }}>
-                    → View Activity
-                  </button>
-                </div>
-              )}
-                </>
-              ) : null}
-
-              {activeAgentId && (
-                <div style={{ border: "1px solid var(--border)", padding: 12, marginTop: 16 }}>
-                  <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>Developer Tools</div>
-                  <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                    <button type="button" onClick={runSafeTest} disabled={safeRunning}
-                      style={{ height: 30, border: `1px solid ${safeRunning ? "var(--border)" : "var(--green)"}`, background: safeRunning ? "transparent" : "rgba(0,200,83,0.12)", color: safeRunning ? "var(--text-3)" : "var(--green)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: safeRunning ? "not-allowed" : "pointer" }}>
-                      {safeRunning ? "running…" : "Run SAFE Test"}
-                    </button>
-                    <button type="button" onClick={runSuspiciousTest} disabled={hitlRunning}
-                      style={{ height: 30, border: `1px solid ${hitlRunning ? "var(--border)" : "var(--amber)"}`, background: hitlRunning ? "transparent" : "rgba(255,149,0,0.12)", color: hitlRunning ? "var(--text-3)" : "var(--amber)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: hitlRunning ? "not-allowed" : "pointer" }}>
-                      {hitlRunning ? "running…" : "Run HITL Test"}
-                    </button>
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>active_agent: {activeAgentId}</div>
-                </div>
-              )}
-            </div>
+            <AgentsPanel
+              agents={agents}
+              activeAgent={activeAgent}
+              activeAgentId={activeAgentId}
+              activeHmac={activeHmac}
+              form={form}
+              onFormChange={setForm}
+              showSuccess={showSuccess}
+              showNewAgentForm={showNewAgentForm}
+              secretReveal={secretReveal}
+              onToggleSecret={() => setSecretReveal((prev) => !prev)}
+              onShowNewAgent={() => { setShowNewAgentForm(true); setShowSuccess(false); }}
+              onHideNewAgent={() => { setShowNewAgentForm(false); setShowSuccess(false); }}
+              onCreateAgent={handleCreateAgent}
+              onAddBlockedVendor={addBlockedVendor}
+              onAddScope={addScope}
+              onRemoveScope={removeScope}
+              onRunSafeTest={runSafeTest}
+              onRunSuspiciousTest={runSuspiciousTest}
+              safeRunning={safeRunning}
+              hitlRunning={hitlRunning}
+              onGoToActivity={() => setPage("activity")}
+              onSaveScopes={saveAgentScopes}
+              scopesSaving={scopesSaving}
+            />
           ) : null}
 
           {page === "settings" ? (
