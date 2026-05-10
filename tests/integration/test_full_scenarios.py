@@ -400,6 +400,21 @@ class TestSuspiciousHitlPath:
         content, headers = _sign_agent(body)
         return client.post("/v1/spend-request", content=content, headers=headers)
 
+    def test_missing_destination_routes_to_hitl(self):
+        body = {
+            **_STABLECOIN,
+            "destination_address": "",
+            "idempotency_key": "susp-missing-destination-001",
+        }
+        content, headers = _sign_agent(body)
+        with TestClient(app) as client:
+            resp = client.post("/v1/spend-request", content=content, headers=headers)
+
+        assert resp.status_code == 202, resp.text
+        payload = resp.json()
+        assert payload["status"] == "PENDING_HITL"
+        assert "DESTINATION_ADDRESS_MISSING" in payload["reasons"]
+
     def test_suspicious_returns_202_with_correct_state(self):
         with TestClient(app) as client:
             resp = self._over_threshold_spend(client)

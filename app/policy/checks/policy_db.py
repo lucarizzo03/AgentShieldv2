@@ -116,17 +116,21 @@ def run_policy_checks(
         address = _normalize_addr(destination_address)
         blocked = {_normalize_addr(a) for a in agent.blocked_destination_addresses}
         allowed = {_normalize_addr(a) for a in agent.allowed_destination_addresses}
-        if address in blocked:
-            check.hard_deny = True
-            check.reasons.append("DESTINATION_DENYLISTED")
-        if allowed and address not in allowed:
+        if not address:
             check.suspicious = True
-            check.reasons.append("DESTINATION_NOT_ALLOWLISTED")
+            check.reasons.append("DESTINATION_ADDRESS_MISSING")
+        else:
+            if address in blocked:
+                check.hard_deny = True
+                check.reasons.append("DESTINATION_DENYLISTED")
+            if allowed and address not in allowed:
+                check.suspicious = True
+                check.reasons.append("DESTINATION_NOT_ALLOWLISTED")
         stablecoin_context = {
             "asset_type": asset_type,
             "stablecoin_symbol": stablecoin_symbol,
             "network": network,
-            "destination_address": address,
+            "destination_address": address or None,
         }
 
     check.context = {

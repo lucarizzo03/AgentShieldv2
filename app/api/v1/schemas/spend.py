@@ -30,10 +30,10 @@ class SpendRequest(BaseModel):
     @model_validator(mode="after")
     def validate_asset_fields(self) -> "SpendRequest":
         if self.asset_type == "STABLECOIN":
-            required_fields = [self.stablecoin_symbol, self.network, self.destination_address]
+            required_fields = [self.stablecoin_symbol, self.network]
             if any(value is None for value in required_fields):
                 raise ValueError(
-                    "stablecoin_symbol, network, and destination_address are required for STABLECOIN"
+                    "stablecoin_symbol and network are required for STABLECOIN"
                 )
         return self
 
