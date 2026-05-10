@@ -415,6 +415,26 @@ class TestSuspiciousHitlPath:
         assert payload["status"] == "PENDING_HITL"
         assert "DESTINATION_ADDRESS_MISSING" in payload["reasons"]
 
+    def test_missing_destination_for_locus_mpp_vendor_is_safe(self):
+        _mock_semantic("ALIGNED")
+        body = {
+            **_STABLECOIN,
+            "destination_address": "",
+            "vendor_url_or_name": "https://abstract-exchange-rates.mpp.paywithlocus.com/abstract-exchange-rates/live",
+            "item_description": "Live exchange rate data for JPY",
+            "declared_goal": "Get live exchange rate data for Japanese Yen for financial reference",
+            "idempotency_key": "safe-mpp-missing-destination-001",
+        }
+        content, headers = _sign_agent(body)
+        with TestClient(app) as client:
+            resp = client.post("/v1/spend-request", content=content, headers=headers)
+
+        assert resp.status_code == 200, resp.text
+        payload = resp.json()
+        assert payload["status"] == "APPROVED_EXECUTED"
+        assert payload["verdict"] == "SAFE"
+        assert "DESTINATION_DEFERRED_MPP" in payload["reasons"]
+
     def test_suspicious_returns_202_with_correct_state(self):
         with TestClient(app) as client:
             resp = self._over_threshold_spend(client)

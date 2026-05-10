@@ -72,6 +72,11 @@ def _normalize_addr(address: str | None) -> str:
     return (address or "").strip().lower()
 
 
+def _is_locus_mpp_vendor(vendor: str) -> bool:
+    host = _extract_hostname(vendor)
+    return bool(host and host.endswith(".mpp.paywithlocus.com"))
+
+
 def run_policy_checks(
     agent: Agent,
     amount_cents: int,
@@ -117,8 +122,11 @@ def run_policy_checks(
         blocked = {_normalize_addr(a) for a in agent.blocked_destination_addresses}
         allowed = {_normalize_addr(a) for a in agent.allowed_destination_addresses}
         if not address:
-            check.suspicious = True
-            check.reasons.append("DESTINATION_ADDRESS_MISSING")
+            if _is_locus_mpp_vendor(vendor_url_or_name):
+                check.reasons.append("DESTINATION_DEFERRED_MPP")
+            else:
+                check.suspicious = True
+                check.reasons.append("DESTINATION_ADDRESS_MISSING")
         else:
             if address in blocked:
                 check.hard_deny = True
