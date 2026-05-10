@@ -353,6 +353,31 @@ class TestSafePath:
             resp = client.post("/v1/spend-request", content=content, headers=headers)
         assert resp.status_code == 403
 
+    def test_validation_rejection_still_writes_audit_log(self):
+        invalid_payload = {
+            **_STABLECOIN,
+            "stablecoin_symbol": "",
+            "network": "",
+            "destination_address": "",
+            "idempotency_key": "test-invalid-visible-001",
+        }
+        content, headers = _sign_agent(invalid_payload)
+        with TestClient(app) as client:
+            resp = client.post("/v1/spend-request", content=content, headers=headers)
+
+        assert resp.status_code == 422
+        body = resp.json()
+        assert body.get("request_id")
+
+        with Session(engine) as session:
+            log = session.exec(
+                select(SpendAuditLog).where(SpendAuditLog.request_id == body["request_id"])
+            ).first()
+        assert log is not None
+        assert log.status == "BLOCKED"
+        assert log.verdict == "MALICIOUS"
+        assert log.policy_result.get("validation_errors")
+
 
 # ===========================================================================
 # TEST 2 — SUSPICIOUS / HITL PATH

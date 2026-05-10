@@ -4,7 +4,11 @@ from time import perf_counter
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlmodel import Session, select
 
 from app.api.v1.routes.agents import router as agents_router
 from app.api.v1.routes.dashboard import router as dashboard_router
@@ -13,7 +17,9 @@ from app.api.v1.routes.hitl import router as hitl_router
 from app.api.v1.routes.onboarding import router as onboarding_router
 from app.api.v1.routes.spend import router as spend_router
 from app.core.logging import configure_logging
-from app.db.postgres import create_db_and_tables
+from app.db.postgres import create_db_and_tables, engine
+from app.models.agent import Agent
+from app.models.spend_audit_log import SpendAuditLog
 from app.services.hitl.expiry_sweeper import run_expiry_sweeper
 
 
@@ -38,6 +44,67 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        request_id = request.headers.get("x-request-id", f"trace_{uuid4().hex[:12]}")
+        logged_request_id = None
+
+        if request.method.upper() == "POST" and request.url.path == "/v1/spend-request":
+            try:
+                payload = await request.json()
+            except Exception:
+                payload = None
+
+            if isinstance(payload, dict):
+                agent_id = payload.get("agent_id")
+                if isinstance(agent_id, str) and agent_id:
+                    raw_amount = payload.get("amount_cents")
+                    try:
+                        parsed_amount = int(raw_amount)
+                    except Exception:
+                        parsed_amount = 1
+                    amount_cents = parsed_amount if parsed_amount > 0 else 1
+                    asset_type = payload.get("asset_type")
+                    if asset_type not in {"STABLECOIN", "FIAT"}:
+                        asset_type = "STABLECOIN"
+                    with Session(engine) as session:
+                        agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
+                        if agent:
+                            validation_errors = jsonable_encoder(exc.errors())
+                            logged_request_id = f"req_val_{uuid4().hex[:18]}"
+                            session.add(
+                                SpendAuditLog(
+                                    request_id=logged_request_id,
+                                    agent_id=agent_id,
+                                    declared_goal=str(payload.get("declared_goal") or "VALIDATION_REJECTED"),
+                                    amount_cents=amount_cents,
+                                    currency=str(payload.get("currency") or "USD"),
+                                    asset_type=asset_type,
+                                    stablecoin_symbol=payload.get("stablecoin_symbol"),
+                                    network=payload.get("network"),
+                                    destination_address=payload.get("destination_address"),
+                                    vendor_url_or_name=str(payload.get("vendor_url_or_name") or "unknown"),
+                                    item_description=str(payload.get("item_description") or "Validation rejected"),
+                                    quantitative_result={"validation_rejected": True},
+                                    policy_result={"validation_errors": validation_errors},
+                                    semantic_result={},
+                                    goal_drift_result={},
+                                    verdict="MALICIOUS",
+                                    status="BLOCKED",
+                                )
+                            )
+                            session.commit()
+
+        return JSONResponse(
+            status_code=422,
+            content={
+                "message": "Request validation failed",
+                "detail": exc.errors(),
+                "request_id": logged_request_id,
+                "trace_id": request_id,
+            },
+        )
 
     @app.middleware("http")
     async def request_context_middleware(request: Request, call_next):
