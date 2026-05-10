@@ -1,4 +1,5 @@
 import re
+from urllib.parse import urlparse
 
 from app.models.agent import Agent
 from app.policy.verdicts import CheckResult
@@ -6,7 +7,48 @@ from app.policy.verdicts import CheckResult
 
 def _contains_vendor_match(blocked_vendors: list[str], vendor: str) -> bool:
     candidate = vendor.lower().strip()
-    return any(entry.lower().strip() in candidate for entry in blocked_vendors)
+    candidate_host = _extract_hostname(candidate)
+    candidate_labels = set(candidate_host.split(".")) if candidate_host else set()
+
+    for raw_entry in blocked_vendors:
+        entry = raw_entry.lower().strip()
+        if not entry:
+            continue
+
+        entry_host = _extract_hostname(entry)
+        if entry_host and candidate_host:
+            # Domain-like entries are matched as exact host or subdomain suffix.
+            if candidate_host == entry_host or candidate_host.endswith(f".{entry_host}"):
+                return True
+            continue
+
+        if candidate_host and entry in candidate_labels:
+            # Allow blocking by a full DNS label (e.g. "badvendor"), but avoid
+            # broad substring matches (e.g. "pay" should not match "paywithlocus").
+            return True
+
+        if candidate == entry:
+            return True
+
+        if re.search(rf"\b{re.escape(entry)}\b", candidate):
+            return True
+
+    return False
+
+
+def _extract_hostname(value: str) -> str | None:
+    raw = value.strip().lower()
+    if not raw:
+        return None
+
+    with_scheme = raw if "://" in raw else f"https://{raw}"
+    parsed = urlparse(with_scheme)
+    host = (parsed.hostname or "").strip().lower()
+    if not host:
+        return None
+    if re.fullmatch(r"[a-z0-9-]+(\.[a-z0-9-]+)+", host) is None:
+        return None
+    return host
 
 
 def _is_phishing_vendor(vendor: str) -> bool:
