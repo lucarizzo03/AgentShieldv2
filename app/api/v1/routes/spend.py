@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -125,6 +126,52 @@ def _build_agent_feedback(*, verdict: str, reasons: list[str], tri) -> dict:
     }
 
 
+def _record_idempotency_replay(session: Session, *, request_id: str) -> None:
+    original = session.exec(
+        select(SpendAuditLog)
+        .where(SpendAuditLog.request_id == request_id)
+        .order_by(SpendAuditLog.created_at.desc())
+    ).first()
+    if not original:
+        return
+
+    quantitative_result = deepcopy(original.quantitative_result or {})
+    quantitative_result["idempotency_replay"] = True
+    quantitative_result["idempotency_replay_at"] = datetime.now(timezone.utc).isoformat()
+
+    replay_row = SpendAuditLog(
+        request_id=original.request_id,
+        agent_id=original.agent_id,
+        declared_goal=original.declared_goal,
+        amount_cents=original.amount_cents,
+        currency=original.currency,
+        asset_type=original.asset_type,
+        stablecoin_symbol=original.stablecoin_symbol,
+        network=original.network,
+        destination_address=original.destination_address,
+        vendor_url_or_name=original.vendor_url_or_name,
+        item_description=original.item_description,
+        quantitative_result=quantitative_result,
+        policy_result=deepcopy(original.policy_result or {}),
+        semantic_result=deepcopy(original.semantic_result or {}),
+        goal_drift_result=deepcopy(original.goal_drift_result or {}),
+        verdict=original.verdict,
+        status=original.status,
+    )
+    session.add(replay_row)
+    append_agent_activity(
+        session,
+        agent_id=original.agent_id,
+        event_type="IDEMPOTENCY_REPLAY_RETURNED",
+        event_payload={
+            "request_id": original.request_id,
+            "status": original.status,
+            "verdict": original.verdict,
+        },
+    )
+    session.commit()
+
+
 @router.post("/spend-request")
 async def spend_request(
     payload: SpendRequest,
@@ -151,6 +198,8 @@ async def spend_request(
         replay_body = dict(cached["body"])
         replay_body["idempotency_replay"] = True
         replay_body["idempotency_note"] = "Returned cached decision for this idempotency key. No new evaluation was performed."
+        if replay_body.get("request_id"):
+            _record_idempotency_replay(session, request_id=str(replay_body["request_id"]))
         response.headers["x-idempotency-replay"] = "true"
         if replay_body.get("request_id"):
             response.headers["x-original-request-id"] = str(replay_body["request_id"])
