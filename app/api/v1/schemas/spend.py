@@ -13,7 +13,7 @@ class SpendRequest(BaseModel):
     currency: str = Field(pattern=r"^[A-Z]{3}$")
     vendor_url_or_name: str = Field(min_length=2, max_length=512)
     item_description: str = Field(min_length=2, max_length=4000)
-    asset_type: Literal["STABLECOIN"]
+    asset_type: Literal["STABLECOIN", "FIAT"]
     stablecoin_symbol: Literal["USDC", "USDT", "USDC.e", "USDC.b"] | None = None
     network: Literal["ethereum", "base", "solana", "polygon", "arbitrum"] | None = None
     destination_address: str | None = Field(default=None, min_length=16, max_length=128)
@@ -21,7 +21,7 @@ class SpendRequest(BaseModel):
     agent_callback_url: HttpUrl | None = None
 
     @model_validator(mode="after")
-    def validate_stablecoin_fields(self) -> "SpendRequest":
+    def validate_asset_fields(self) -> "SpendRequest":
         if self.asset_type == "STABLECOIN":
             required_fields = [self.stablecoin_symbol, self.network, self.destination_address]
             if any(value is None for value in required_fields):

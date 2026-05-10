@@ -216,6 +216,17 @@ _STABLECOIN = dict(
     idempotency_key="test-safe-001",
 )
 
+_FIAT = dict(
+    agent_id="test_agent_001",
+    declared_goal="Pay monthly software subscription invoice",
+    amount_cents=2_000,
+    currency="USD",
+    asset_type="FIAT",
+    vendor_url_or_name="notion.so",
+    item_description="Monthly Notion Team subscription",
+    idempotency_key="test-fiat-safe-001",
+)
+
 
 # ===========================================================================
 # TEST 1 — SAFE PATH
@@ -245,6 +256,20 @@ class TestSafePath:
         assert body["approved_amount_cents"] == 2_000
 
         reasons = body["reasons"]
+        assert "BUDGET_WITHIN_LIMIT" in reasons
+        assert "VENDOR_ALLOWED" in reasons
+
+    def test_safe_fiat_executes_immediately(self):
+        content, headers = _sign_agent(_FIAT)
+        with TestClient(app) as client:
+            resp = client.post("/v1/spend-request", content=content, headers=headers)
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        reasons = body["reasons"]
+        assert body["status"] == "APPROVED_EXECUTED"
+        assert body["verdict"] == "SAFE"
+        assert body["approved_amount_cents"] == 2_000
         assert "BUDGET_WITHIN_LIMIT" in reasons
         assert "VENDOR_ALLOWED" in reasons
         assert "SEMANTIC_ALIGNMENT_HIGH" in reasons
