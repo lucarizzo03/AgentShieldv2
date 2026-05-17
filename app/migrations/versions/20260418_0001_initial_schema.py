@@ -93,8 +93,6 @@ def upgrade() -> None:
         sa.Column("payload_json", sa.JSON(), nullable=True),
         sa.Column("verdict_snapshot", sa.JSON(), nullable=True),
         sa.Column("state", sa.String(length=32), nullable=False),
-        sa.Column("hitl_channel", sa.String(length=16), nullable=False),
-        sa.Column("hitl_contact", sa.String(length=128), nullable=True),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("resolved_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("resolver_id", sa.String(length=128), nullable=True),

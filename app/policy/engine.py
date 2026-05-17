@@ -1,3 +1,5 @@
+import asyncio
+
 from app.models.agent import Agent
 from app.policy.checks.goal_drift import run_goal_drift_check
 from app.policy.checks.policy_db import run_policy_checks
@@ -40,24 +42,37 @@ async def run_financial_triangulation(
         network=network,
         destination_address=destination_address,
     )
-    semantic = await run_semantic_checks(
-        semantic_client=semantic_client,
-        declared_goal=declared_goal,
-        amount_cents=amount_cents,
-        vendor_url_or_name=vendor_url_or_name,
-        item_description=item_description,
-        stablecoin_symbol=stablecoin_symbol,
-        network=network,
-        destination_address=destination_address,
-    )
-    goal_drift = await run_goal_drift_check(
-        agent=agent,
-        declared_goal=declared_goal,
-        semantic_client=semantic_client,
+
+    if quantitative.hard_deny or policy.hard_deny:
+        return TriangulationResult(
+            verdict="MALICIOUS",
+            reasons=[*quantitative.reasons, *policy.reasons],
+            quantitative_result=quantitative.context,
+            policy_result=policy.context,
+            semantic_result={},
+            goal_drift_result={},
+        )
+
+    semantic, goal_drift = await asyncio.gather(
+        run_semantic_checks(
+            semantic_client=semantic_client,
+            declared_goal=declared_goal,
+            amount_cents=amount_cents,
+            vendor_url_or_name=vendor_url_or_name,
+            item_description=item_description,
+            stablecoin_symbol=stablecoin_symbol,
+            network=network,
+            destination_address=destination_address,
+        ),
+        run_goal_drift_check(
+            agent=agent,
+            declared_goal=declared_goal,
+            semantic_client=semantic_client,
+        ),
     )
 
     reasons = [*quantitative.reasons, *policy.reasons, *semantic.reasons, *goal_drift.reasons]
-    if quantitative.hard_deny or policy.hard_deny or semantic.hard_deny or goal_drift.hard_deny:
+    if semantic.hard_deny or goal_drift.hard_deny:
         verdict = "MALICIOUS"
     elif quantitative.suspicious or policy.suspicious or semantic.suspicious or goal_drift.suspicious:
         verdict = "SUSPICIOUS"
