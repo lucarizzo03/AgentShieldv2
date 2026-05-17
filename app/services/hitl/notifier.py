@@ -1,5 +1,6 @@
 import hashlib
 import hmac as _hmac
+import html as _html
 import logging
 from datetime import datetime
 
@@ -28,6 +29,9 @@ def _build_html(
     approve_url: str,
     deny_url: str,
 ) -> str:
+    vendor = _html.escape(vendor)
+    goal = _html.escape(goal)
+    item = _html.escape(item)
     reason_tags = "".join(
         f'<span style="display:inline-block;margin:0 6px 6px 0;padding:4px 10px;background:#f1f5f9;color:#475569;border-radius:4px;font-size:11px;font-family:monospace;letter-spacing:0.02em">{r}</span>'
         for r in reasons
@@ -129,6 +133,13 @@ class HitlNotifier:
         vendor = pending.payload_json.get("vendor_url_or_name", "unknown")
         goal = pending.payload_json.get("declared_goal", "")
         item = pending.payload_json.get("item_description", "")
+
+        def _strip_newlines(s: str) -> str:
+            return s.replace("\r", "").replace("\n", " ")
+
+        vendor_plain = _strip_newlines(vendor)
+        goal_plain = _strip_newlines(goal)
+        item_plain = _strip_newlines(item)
         reasons = pending.verdict_snapshot.get("reasons", [])
         raw_expires = pending.expires_at
         if isinstance(raw_expires, datetime):
@@ -139,11 +150,11 @@ class HitlNotifier:
         approve_url = _signed_url(settings.api_public_url, settings.webhook_hmac_secret, pending.request_id, "APPROVE")
         deny_url = _signed_url(settings.api_public_url, settings.webhook_hmac_secret, pending.request_id, "DENY")
 
-        subject = f"[AgentShield] Approval Required — ${amount_usd:.2f} to {vendor}"
+        subject = f"[AgentShield] Approval Required — ${amount_usd:.2f} to {vendor_plain}"
         html = _build_html(amount_usd, vendor, goal, item, reasons, expires_at, pending.request_id, approve_url, deny_url)
         plain = (
-            f"Approval required: ${amount_usd:.2f} to {vendor}\n"
-            f"Goal: {goal}\nItem: {item}\n"
+            f"Approval required: ${amount_usd:.2f} to {vendor_plain}\n"
+            f"Goal: {goal_plain}\nItem: {item_plain}\n"
             f"Request ID: {pending.request_id}\n"
             f"Flags: {', '.join(reasons)}\n"
             f"Expires: {expires_at}\n\n"

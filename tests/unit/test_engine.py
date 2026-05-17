@@ -358,9 +358,10 @@ async def test_engine_semantic_aligned_safe(redis, semantic) -> None:
     result = await run_financial_triangulation(
         redis=redis, semantic_client=semantic, agent=agent,
         **_kwargs(
-            declared_goal="Book flight JFK to LAX",
-            vendor_url_or_name="delta.com",
-            item_description="Economy seat JFK-LAX",
+            declared_goal="Get current weather forecast for NYC trip planning",
+            vendor_url_or_name="openweathermap.org",
+            item_description="Weather API call for NYC coordinates",
+            amount_cents=2,
         ),
     )
     assert result.verdict == "SAFE"
