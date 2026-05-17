@@ -222,6 +222,7 @@ _FIAT = dict(
     amount_cents=2_000,
     currency="USD",
     asset_type="FIAT",
+    destination_address="fiat-destination-acct-0001",
     vendor_url_or_name="notion.so",
     item_description="Monthly Notion Team subscription",
     idempotency_key="test-fiat-safe-001",
@@ -304,10 +305,7 @@ class TestSafePath:
         with TestClient(app) as client:
             resp = client.post("/v1/spend-request", content=content, headers=headers)
 
-        assert resp.status_code == 200, resp.text
-        body = resp.json()
-        assert body["status"] == "APPROVED_EXECUTED"
-        assert body["verdict"] == "SAFE"
+        assert resp.status_code == 422, resp.text
 
     def test_idempotency_returns_cached_response_without_second_execution(self):
         content, headers = _sign_agent(_STABLECOIN)
@@ -400,7 +398,7 @@ class TestSuspiciousHitlPath:
         content, headers = _sign_agent(body)
         return client.post("/v1/spend-request", content=content, headers=headers)
 
-    def test_missing_destination_routes_to_hitl(self):
+    def test_missing_destination_is_validation_error(self):
         body = {
             **_STABLECOIN,
             "destination_address": "",
@@ -410,12 +408,9 @@ class TestSuspiciousHitlPath:
         with TestClient(app) as client:
             resp = client.post("/v1/spend-request", content=content, headers=headers)
 
-        assert resp.status_code == 202, resp.text
-        payload = resp.json()
-        assert payload["status"] == "PENDING_HITL"
-        assert "DESTINATION_ADDRESS_MISSING" in payload["reasons"]
+        assert resp.status_code == 422, resp.text
 
-    def test_missing_destination_for_locus_mpp_vendor_is_safe(self):
+    def test_missing_destination_for_locus_mpp_vendor_is_validation_error(self):
         _mock_semantic("ALIGNED")
         body = {
             **_STABLECOIN,
@@ -429,11 +424,7 @@ class TestSuspiciousHitlPath:
         with TestClient(app) as client:
             resp = client.post("/v1/spend-request", content=content, headers=headers)
 
-        assert resp.status_code == 200, resp.text
-        payload = resp.json()
-        assert payload["status"] == "APPROVED_EXECUTED"
-        assert payload["verdict"] == "SAFE"
-        assert "DESTINATION_DEFERRED_MPP" in payload["reasons"]
+        assert resp.status_code == 422, resp.text
 
     def test_suspicious_returns_202_with_correct_state(self):
         with TestClient(app) as client:

@@ -110,7 +110,7 @@ def test_stablecoin_missing_destination_is_suspicious() -> None:
     assert "DESTINATION_ADDRESS_MISSING" in result.reasons
 
 
-def test_stablecoin_missing_destination_is_allowed_for_locus_mpp_vendor() -> None:
+def test_stablecoin_missing_destination_for_locus_mpp_vendor_is_suspicious() -> None:
     agent = _agent()
     result = run_policy_checks(
         agent=agent,
@@ -121,9 +121,8 @@ def test_stablecoin_missing_destination_is_allowed_for_locus_mpp_vendor() -> Non
         network="base",
         destination_address=None,
     )
-    assert result.suspicious is False
-    assert "DESTINATION_DEFERRED_MPP" in result.reasons
-    assert "DESTINATION_ADDRESS_MISSING" not in result.reasons
+    assert result.suspicious is True
+    assert "DESTINATION_ADDRESS_MISSING" in result.reasons
 
 
 @pytest.mark.parametrize("symbol,network", [("USDT", "base"), ("USDC", "ethereum")])
