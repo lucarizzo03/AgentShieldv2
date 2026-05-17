@@ -48,9 +48,33 @@ const emptyChart = [
 function normalizeStatus(status) {
   if (status === "PENDING_HITL") return "PENDING";
   if (status === "BLOCKED") return "BLOCKED";
+  if (status === "EXPIRED") return "BLOCKED";
+  if (status === "APPROVED_EXECUTED") return "SAFE";
   if (status === "APPROVED_BY_HUMAN_EXECUTED") return "APPROVED";
   if (status === "DENIED_BY_HUMAN") return "DENIED";
   return "SAFE";
+}
+
+function isTerminalAuditStatus(status) {
+  return [
+    "APPROVED_EXECUTED",
+    "APPROVED_BY_HUMAN_EXECUTED",
+    "BLOCKED",
+    "DENIED_BY_HUMAN",
+    "EXPIRED",
+  ].includes(status);
+}
+
+function selectPreferredActivityItem(current, candidate) {
+  const currentTerminal = isTerminalAuditStatus(current.status);
+  const candidateTerminal = isTerminalAuditStatus(candidate.status);
+
+  // If a terminal row exists for the same request, prefer it over pending.
+  if (currentTerminal !== candidateTerminal) {
+    return candidateTerminal ? candidate : current;
+  }
+
+  return new Date(candidate.created_at) > new Date(current.created_at) ? candidate : current;
 }
 
 function buildChecklistRows(payload, prefix) {
@@ -208,7 +232,19 @@ export default function App() {
         totalToday: activityResp.total_transactions_today ?? 0,
         countMode: activityResp.count_mode || "today_utc",
       });
-      const newRows = activityResp.activity.map((item) => {
+      const preferredByRequest = activityResp.activity.reduce((acc, item) => {
+        const existing = acc.get(item.request_id);
+        if (!existing) {
+          acc.set(item.request_id, item);
+          return acc;
+        }
+        acc.set(item.request_id, selectPreferredActivityItem(existing, item));
+        return acc;
+      }, new Map());
+
+      const newRows = Array.from(preferredByRequest.values())
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+        .map((item) => {
         const slm = item.semantic_result || {};
         const gd = item.goal_drift_result || {};
         return {

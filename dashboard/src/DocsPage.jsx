@@ -363,7 +363,7 @@ result = client.spend_request(SpendRequest(
 ))
 
 if result.verdict == "SAFE":
-    execute_payment()
+    execute_payment()  # your code — AgentShield cleared it, you execute it
 elif result.verdict == "SUSPICIOUS":
     # poll until human resolves
     status = client.get_spend_status(result.request_id)
@@ -398,7 +398,7 @@ if result.verdict == "SUSPICIOUS":
         status = client.get_spend_status(result.request_id)
         if status.status != "WAITING_HUMAN":
             if status.status == "APPROVED_BY_HUMAN_EXECUTED":
-                print("Human approved — payment executed")
+                print("Human approved — agent cleared to proceed")
             else:
                 print("Denied or expired")
             break`} {...codeProps} />
@@ -603,7 +603,7 @@ headers = {
               ["202 received", "Agent gets next_action: AGENT_MUST_WAIT and a request_id."],
               ["Review opens", "A notification appears in the Approvals tab for the human reviewer."],
               ["Human decides", "Reviewer approves or denies via the dashboard or email link."],
-              ["Resolution", "APPROVE → payment executes. DENY or expiry (10 min) → blocked."],
+              ["Resolution", "APPROVE → agent cleared to proceed. DENY or expiry (10 min) → blocked."],
             ].map(([title, desc], i) => (
               <div key={i} style={{ display: "flex", gap: 12, paddingBottom: 16 }}>
                 <div style={{ width: 20, height: 20, borderRadius: "50%", background: "#1e1e1e", border: "1px solid #333", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, color: "#555", flexShrink: 0, marginTop: 1 }}>{i + 1}</div>

@@ -2,7 +2,7 @@
 
 AgentShield is a spending firewall for AI agents. When an agent wants to make a payment, it has to ask AgentShield first. AgentShield runs four checks on the request and responds with one of three answers:
 
-- **SAFE (`200`)** — looks good, payment executed
+- **SAFE (`200`)** — cleared, agent may proceed with the payment
 - **SUSPICIOUS (`202`)** — something's off, a human needs to review it before anything happens
 - **MALICIOUS (`403`)** — blocked, do not retry
 
@@ -36,12 +36,12 @@ After all four checks run, the results are combined into one verdict:
 flowchart TD
     agent[SpendingAgent] --> firewall[AgentShieldAPI]
     firewall --> checkA[A: Redis Quantitative]
-    firewall --> checkB[B: Postgres Policy]
-    firewall --> checkC[C: Claude Haiku Semantic]
-    firewall --> checkD[D: Claude Haiku Goal Drift]
-    checkA --> synth[VerdictSynthesis]
-    checkB --> synth
-    checkC --> synth
+    checkA --> checkB[B: Postgres Policy]
+    checkB -->|hard deny| deny403early[403 Blocked]
+    checkB -->|pass| parallel[Run C + D in parallel]
+    parallel --> checkC[C: Claude Haiku Semantic]
+    parallel --> checkD[D: Claude Haiku Goal Drift]
+    checkC --> synth[VerdictSynthesis]
     checkD --> synth
     synth -->|SAFE| pay[PaymentAdapter]
     pay --> ok200[200 Approved + Executed]
@@ -58,6 +58,9 @@ flowchart TD
 
 ## Architecture & Design Decisions
 
+**Do the four checks run at the same time?**
+Partially. Checks A (quantitative) and B (policy) run sequentially in that order. If either hard-denies the request, checks C and D are skipped entirely — there's no point calling Claude when the request is already blocked. If A and B both pass, checks C and D run **in parallel** via `asyncio.gather`, since both make Claude API calls and their results are independent.
+
 **Why does Check A use Redis instead of Postgres?**
 Check A tracks the budget, loop counts, and destination burst counts. These need to be fast (they happen on every request) and they use simple counters with expiry times. Redis is a perfect fit — it's an in-memory key-value store that handles counters natively and lets you set an automatic expiry on any key.
 
@@ -67,20 +70,23 @@ Without a Lua script, two concurrent requests could both check the budget, both 
 **Why does the budget key include the date (`budget:daily:{agent_id}:{asset_type}:{YYYY-MM-DD}`)?**
 Because the key expires automatically when the next day's key takes over. No cron job, no scheduled cleanup — the old key just stops being used. The date also separates stablecoin and fiat budgets per day without needing a separate database table.
 
+**When exactly is the budget deducted?**
+The budget is **atomically reserved** the moment Check A runs (via the Lua script). For a `SAFE` verdict, that reservation is finalized (TTL refreshed). For `SUSPICIOUS` (HITL hold), the reservation is **rolled back** immediately — the amount is only re-committed if a human approves the spend. For `MALICIOUS`, the reservation is rolled back. This means no budget is ever consumed by a blocked or pending-then-denied request.
+
 **Why does loop detection hash the transaction instead of storing it?**
 Check A generates a SHA256 hash of the transaction details (vendor, amount, item, network, address) and uses that hash as a Redis key with a counter. If the same transaction repeats more than `LOOP_THRESHOLD` times in `LOOP_WINDOW_SECONDS`, it's flagged. This way you only store one counter per unique transaction shape, regardless of how many requests come in.
 
 **Why does Check B read from the Agent's database row instead of a separate policy table?**
 The agent's blocked vendors, amount limits, and stablecoin rules are all stored directly on the `Agent` row in Postgres. Check B just reads that one row — no joins, no extra tables. These rules don't change often, and keeping them on the agent record means the logic is simple and there's no risk of policies being out of sync.
 
-**Do the four checks run at the same time?**
-No. They run one after another: A → B → C → D. Check B is synchronous (no waiting for a network call). Checks C and D each call the Claude API, which is the dominant cost. Running them in parallel is a future improvement.
-
 **What happens if the Claude API is down during Check C?**
-It fails safe. The check returns `WEAK` with a score of 55, which routes the request to human review (SUSPICIOUS) rather than auto-approving or hard-blocking. The agent never gets blocked just because an external API had downtime — a human reviews it instead.
+It fails safe. The check returns `WEAK` with a score of 55, which routes the request to human review (`SUSPICIOUS`) rather than auto-approving or hard-blocking. The agent never gets blocked just because an external API had downtime — a human reviews it instead.
+
+**What happens if the Claude API is down during Check D?**
+Check D fails **suspicious** — not open. Any exception from the API results in `GOAL_DRIFT_EVAL_UNAVAILABLE`, which routes the request to human review (`SUSPICIOUS`). This is intentional: goal-drift evaluation is considered load-bearing when `allowed_scopes` are configured, so an outage goes to HITL rather than being silently skipped.
 
 **What is idempotency and why does it matter here?**
-If an agent sends the same request twice (e.g., after a network timeout), without idempotency protection AgentShield would run all four checks again and potentially execute the payment a second time. If an agent includes an `idempotency_key` in its request, AgentShield caches the response in Redis for 24 hours and returns the same answer on any retry without re-running checks or re-charging.
+If an agent sends the same request twice (e.g., after a network timeout), without idempotency protection AgentShield would run all four checks again and potentially clear the same payment twice — meaning the agent would receive two `SAFE` verdicts and could pay twice. If an agent includes an `idempotency_key`, AgentShield caches the verdict in Redis for 24 hours and returns the same answer on any retry without re-running checks.
 
 **Why HMAC signatures instead of just an API key?**
 An API key proves who you are but doesn't prove your message wasn't tampered with in transit. AgentShield's HMAC signature covers the request body, method, path, and a timestamp — so the server can verify nothing was changed and the request isn't a replay of an old one. Each agent has its own signing secret, so a leaked key from one agent can't be used for another.
@@ -93,7 +99,7 @@ An API key proves who you are but doesn't prove your message wasn't tampered wit
 
 | Scenario | Which check handles it |
 |---|---|
-| Agent tries to pay a blocked vendor | Check B: vendor substring blocklist |
+| Agent tries to pay a blocked vendor | Check B: hostname/domain blocklist |
 | Agent tries to pay a lookalike phishing domain | Check B: phishing domain pattern detection |
 | Agent pays a vendor that doesn't match its stated goal | Check C: semantic alignment scoring |
 | Agent's goal is outside what it's supposed to do (e.g., flight-booking agent told to buy crypto) | Check D: allowed scopes comparison |
@@ -107,7 +113,7 @@ An API key proves who you are but doesn't prove your message wasn't tampered wit
 | A compromised dashboard operator | Someone with valid login credentials can update policies, raise limits, and approve any pending request |
 | Redis being unreachable | Check A fails with a 500 error — there's no fallback when the Redis connection is lost |
 | A carefully crafted prompt that fools Claude | Checks C and D use an LLM, which can be tricked by a well-crafted `declared_goal` string |
-| Something going wrong after the payment is approved | AgentShield only intercepts before the payment executes; there's no rollback mechanism |
+| Something going wrong after the agent executes the payment | AgentShield only decides; it doesn't control what the agent does after receiving a SAFE verdict |
 
 ---
 
@@ -172,12 +178,14 @@ An API key proves who you are but doesn't prove your message wasn't tampered wit
    ```
    Dashboard available at `http://localhost:5173`
 
+> **SQLite fallback:** If `POSTGRES_DSN` is not set, the API defaults to a local SQLite file (`agentshield.db`). Useful for quick local testing without Docker.
+
 ### Environment Variables
 
 ```
 APP_ENV=dev                                # dev | prod
-POSTGRES_DSN=postgresql+psycopg://...
-REDIS_DSN=redis://localhost:6379/0
+POSTGRES_DSN=postgresql+psycopg://...     # also accepts DATABASE_URL alias
+REDIS_DSN=redis://localhost:6379/0        # also accepts REDIS_URL alias
 ANTHROPIC_API_KEY=...                      # required for semantic check
 ANTHROPIC_MODEL_NAME=claude-haiku-4-5-20251001
 SENDGRID_API_KEY=...                       # required for HITL email
@@ -238,15 +246,16 @@ Submits a spend intent for evaluation.
   "stablecoin_symbol": "USDC",
   "network": "base",
   "destination_address": "0x...",
-  "idempotency_key": "optional-dedup-key"
+  "idempotency_key": "optional-dedup-key",
+  "agent_callback_url": "https://your-agent/callback"
 }
 ```
 
-Stablecoin fields (`stablecoin_symbol`, `network`, `destination_address`) are required when `asset_type` is `STABLECOIN`. Supported networks: `ethereum`, `base`, `solana`, `polygon`, `arbitrum`.
+For `asset_type: STABLECOIN`, `stablecoin_symbol` and `network` are required; `destination_address` is optional (omit for Locus MPP vendors). Supported stablecoin symbols: `USDC`, `USDT`, `USDC.e`, `USDC.b`. Supported networks: `ethereum`, `base`, `solana`, `polygon`, `arbitrum`.
 
 **Responses:**
 
-`200` — SAFE, payment executed:
+`200` — SAFE, agent cleared to proceed:
 ```json
 {
   "request_id": "req_...",
@@ -254,7 +263,8 @@ Stablecoin fields (`stablecoin_symbol`, `network`, `destination_address`) are re
   "verdict": "SAFE",
   "approved_amount_cents": 25000,
   "currency": "USD",
-  "reasons": ["BUDGET_WITHIN_LIMIT", "VENDOR_ALLOWED", "SEMANTIC_ALIGNMENT_HIGH", "GOAL_WITHIN_SCOPE"]
+  "reasons": ["BUDGET_WITHIN_LIMIT", "VENDOR_ALLOWED", "SEMANTIC_ALIGNMENT_HIGH", "GOAL_WITHIN_SCOPE"],
+  "agent_feedback": { ... }
 }
 ```
 
@@ -270,7 +280,10 @@ Stablecoin fields (`stablecoin_symbol`, `network`, `destination_address`) are re
     "expires_at": "..."
   },
   "reasons": ["AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD"],
-  "next_action": "AGENT_MUST_WAIT"
+  "next_action": "AGENT_MUST_WAIT",
+  "status_poll_url": "http://.../v1/spend-request/req_.../status",
+  "poll_interval_seconds": 5,
+  "agent_feedback": { ... }
 }
 ```
 
@@ -282,9 +295,12 @@ Stablecoin fields (`stablecoin_symbol`, `network`, `destination_address`) are re
   "verdict": "MALICIOUS",
   "block_code": "POLICY_HARD_DENY",
   "reasons": ["VENDOR_MATCHED_BLOCKLIST"],
-  "next_action": "DO_NOT_RETRY"
+  "next_action": "DO_NOT_RETRY",
+  "agent_feedback": { ... }
 }
 ```
+
+All responses include an `agent_feedback` object with a per-check breakdown (`check_a_quantitative`, `check_b_policy`, `check_c_semantic`, `check_d_goal_drift`) plus high-risk flags and reason counts.
 
 ---
 
@@ -300,6 +316,8 @@ Approve or deny a pending spend request.
   "resolution_note": "Verified vendor"
 }
 ```
+
+Accepts either an Auth0 Bearer token (dashboard operators) or webhook HMAC headers (`x-webhook-signature` + `x-webhook-timestamp`).
 
 ---
 
@@ -359,13 +377,13 @@ canonical = "\n".join(["POST", "/v1/spend-request", timestamp, body_hash, AGENT_
 signature = hmac.new(AGENT_HMAC_SECRET.encode(), canonical.encode(), hashlib.sha256).hexdigest()
 ```
 
+### Dashboard operators — Auth0 Bearer
+
+Dashboard routes (and the HITL resolve endpoint) accept `Authorization: Bearer <token>` using Auth0 JWT. The token audience must match `AUTH0_AUDIENCE`. Auth0 proves identity but does not cover payload integrity.
+
 ### HITL webhook — HMAC-SHA256
 
-Same mechanics, but no `agent_id` line (4 lines instead of 5), and uses `WEBHOOK_HMAC_SECRET`. Headers: `x-webhook-timestamp` and `x-webhook-signature`.
-
-### Dev bypass
-
-`APP_ENV=dev` relaxes some runtime guards (e.g., HITL webhook signature checking in tests). All production auth paths (HMAC or Auth0 Bearer) are still enforced — there is no header that bypasses auth entirely.
+Same mechanics as agent HMAC, but no `agent_id` line (4 lines instead of 5), and uses `WEBHOOK_HMAC_SECRET`. Headers: `x-webhook-timestamp` and `x-webhook-signature`. The HITL resolve endpoint accepts either this or an Auth0 Bearer token.
 
 ---
 
@@ -374,9 +392,10 @@ Same mechanics, but no `agent_id` line (4 lines instead of 5), and uses `WEBHOOK
 ### Check A — Quantitative (Redis)
 
 ```
-Daily budget:
+Daily budget (atomic Lua):
   key: budget:daily:{agent_id}:{asset_type}:{YYYY-MM-DD}
   → hard deny if (current + new) > daily_budget_limit_cents
+  → amount is atomically reserved; rolled back if verdict is not SAFE
 
 Loop pattern detection:
   fingerprint = SHA256(vendor|amount|item|asset|symbol|network|address)
@@ -385,21 +404,30 @@ Loop pattern detection:
 
 Destination burst:
   key: dest:burst:{agent_id}:{network}:{address}  (TTL: LOOP_WINDOW_SECONDS)
-  → suspicious if count >= 5
+  → suspicious if count >= LOOP_THRESHOLD (default 5)
 ```
 
 ### Check B — Policy (Postgres)
 
 ```
-Vendor blocklist        → hard deny if vendor substring-matches any blocked_vendors
-Phishing domain rules   → hard deny on path parameter patterns / random-looking subdomains
-Amount threshold        → suspicious if amount > hitl_required_over_cents (when set)
-                          or per_txn_auto_approve_limit_cents (fallback)
+Vendor blocklist:
+  Domain vendors → matched as exact hostname or subdomain suffix
+  Plain text vendors → matched on whole-word boundaries
+  → hard deny on match
+
+Phishing domain detection:
+  → hard deny on path-parameter patterns (/:<var>) or subdomains > 30 chars
+
+Amount threshold:
+  → suspicious if amount > hitl_required_over_cents (when set)
+    or > per_txn_auto_approve_limit_cents (default $100) as fallback
+
 Stablecoin rules:
   symbol not in allowed_stablecoins            → hard deny
   network not in allowed_networks              → hard deny
   address in blocked_destination_addresses     → hard deny
   address NOT in allowed_destination_addresses → suspicious (when list non-empty)
+  address missing (non-MPP vendor)             → suspicious
 ```
 
 ### Check C — Semantic (Claude Haiku)
@@ -415,7 +443,7 @@ Sends `declared_goal`, `amount_cents`, `vendor`, `item`, `stablecoin_symbol`, `n
 ```
 
 Verdict mapping:
-- `MISMATCH`, or `raw_score >= 85` (also treated as MISMATCH) → hard deny
+- `MISMATCH`, or `raw_score >= 85` (treated as MISMATCH) → **suspicious** (HITL)
 - `WEAK` with `raw_score >= 50` (configurable via `SEMANTIC_WEAK_SUSPICIOUS_MIN_SCORE`) → suspicious
 - `WEAK` with `raw_score < 50` → pass
 - `ALIGNED` → pass
@@ -437,7 +465,7 @@ Compares `declared_goal` against the agent's `allowed_scopes` list. Skips entire
 
 - `within_scope: false` → suspicious
 - `within_scope: true` → pass
-- API unavailable → fail open (pass, does not block)
+- API unavailable or bad response → **suspicious** (`GOAL_DRIFT_EVAL_UNAVAILABLE`), not silently skipped
 
 ---
 
@@ -448,10 +476,10 @@ When a request is `SUSPICIOUS`, payment is paused and a human has to decide:
 1. The agent gets a `202` response with `next_action: AGENT_MUST_WAIT`
 2. An email with approve/deny links is sent, and a notification appears in the dashboard
 3. The human has `HITL_DEFAULT_TIMEOUT_SECONDS` (default 10 min) to decide
-4. `APPROVE` → payment executes, logged as `APPROVED_BY_HUMAN_EXECUTED`
-5. `DENY` or timeout → logged as `DENIED_BY_HUMAN` or `EXPIRED`, no payment
+4. `APPROVE` → agent is cleared to proceed, budget committed, logged as `APPROVED_BY_HUMAN_EXECUTED`
+5. `DENY` or timeout → logged as `DENIED_BY_HUMAN` or `EXPIRED`, no payment, no budget consumed
 
-The agent can poll `GET /v1/spend-request/{request_id}/status` to check whether a decision was made.
+The agent can poll `GET /v1/spend-request/{request_id}/status` to check whether a decision was made. The `202` response includes a ready-made `status_poll_url` and `poll_interval_seconds: 5`.
 
 ---
 
@@ -482,6 +510,12 @@ Auto-refreshes every 2 seconds. HMAC secrets are stored in `localStorage` keyed 
 | `DashboardNotification` | HITL queue items; states: `OPEN` → `ACKED` / `RESOLVED` / `DISMISSED` |
 | `AgentActivity` | Event log per agent |
 | `User` | Dashboard operator accounts |
+
+**Agent defaults:**
+- `daily_budget_limit_cents`: 100,000 ($1,000/day)
+- `per_txn_auto_approve_limit_cents`: 10,000 ($100/transaction)
+- `allowed_stablecoins`: `["USDC", "USDT"]`
+- `allowed_networks`: `["ethereum", "base", "solana"]`
 
 ### Redis Keys
 
@@ -530,7 +564,7 @@ uv run pytest
 
 - HMAC signatures expire after `SIGNATURE_TOLERANCE_SECONDS` (default 5 min) — old captured requests can't be replayed
 - Idempotency keys prevent a retry from charging twice
-- Budget is only spent when a payment actually executes — SUSPICIOUS and MALICIOUS requests don't count against the budget
-- Vendor blocklist matching is substring-based: adding `"pay"` would also block `"paypal.com"`, so be specific
+- Budget is atomically reserved during Check A and rolled back for any non-SAFE outcome — SUSPICIOUS and MALICIOUS requests never consume budget
+- Vendor blocklist uses hostname/domain matching for URL vendors and word-boundary matching for plain text — not simple substring; be exact with entries
 - Rotating an agent's HMAC secret takes effect immediately — any in-flight requests signed with the old secret will fail
 - Every response includes `x-request-id` and `x-latency-ms` headers for tracing
