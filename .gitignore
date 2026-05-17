@@ -3,6 +3,9 @@ __pycache__/
 .ruff_cache/
 *.pyc
 .env*
+*.egg-info/
+*.db
+.DS_Store
 
 dashboard/node_modules/
 dashboard/dist/
