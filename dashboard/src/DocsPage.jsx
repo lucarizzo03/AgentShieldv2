@@ -251,15 +251,16 @@ export default function DocsPage({ agentId, activeHmac, secretReveal, setSecretR
             <VerdictBadge verdict="SUSPICIOUS" />
             <VerdictBadge verdict="MALICIOUS" />
           </div>
-          <P>The three checks run in parallel on every request:</P>
+          <P>Every request runs four checks. Checks A and B run sequentially first — if either hard-denies, C and D are skipped entirely and no Claude API call is made. C and D run in parallel only when A and B both pass.</P>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24 }}>
             {[
-              ["Quantitative", "Redis", "Daily budgets, transaction loops, destination bursting"],
-              ["Policy", "Postgres", "Vendor blocklists, amount thresholds, stablecoin rules"],
-              ["Semantic", "Claude Haiku", "LLM alignment between stated goal and actual purchase"],
+              ["A · Quantitative", "Redis", "Daily budgets, transaction loop patterns, destination bursting"],
+              ["B · Policy", "Postgres", "Vendor blocklists, amount thresholds, stablecoin / network / address rules"],
+              ["C · Semantic", "Claude Haiku", "LLM alignment between stated goal and actual purchase"],
+              ["D · Goal Drift", "Claude Haiku", "Declared goal vs agent's configured allowed scopes"],
             ].map(([name, store, desc]) => (
               <div key={name} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 14px", border: "1px solid #1e1e1e", borderRadius: 6, background: "#0d0d0d" }}>
-                <div style={{ minWidth: 100 }}>
+                <div style={{ minWidth: 120 }}>
                   <div style={{ fontSize: 13, color: "#ededed", fontWeight: 500 }}>{name}</div>
                   <div style={{ fontSize: 11, color: "#444", fontFamily: "var(--font-mono)", marginTop: 2 }}>{store}</div>
                 </div>
@@ -381,7 +382,7 @@ elif result.verdict == "MALICIOUS":
             ["asset_type", "FIAT | STABLECOIN", "Yes", "Payment rail"],
             ["stablecoin_symbol", "str", "If STABLECOIN", "USDC, USDT, etc."],
             ["network", "str", "If STABLECOIN", "base, ethereum, solana, etc."],
-            ["destination_address", "str", "If STABLECOIN", "Wallet address"],
+            ["destination_address", "str", "Yes", "Wallet address (required for all requests)"],
             ["idempotency_key", "str", "No", "Deduplication key for retries"],
             ["agent_callback_url", "str", "No", "Webhook for HITL resolution"],
           ]} />
@@ -504,7 +505,7 @@ print(rotated.hmac_secret)  # new secret`} {...codeProps} />
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
             {[
               ["Tokens", ["USDC", "USDT", "USDC.e", "USDC.b"]],
-              ["Networks", ["ethereum", "base", "solana", "polygon", "arbitrum", "tempo"]],
+              ["Networks", ["ethereum", "base", "solana", "polygon", "arbitrum"]],
             ].map(([label, items]) => (
               <div key={label} style={{ padding: "12px 14px", border: "1px solid #1e1e1e", borderRadius: 6, background: "#0d0d0d" }}>
                 <div style={{ fontSize: 11, color: "#555", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>{label}</div>
@@ -568,7 +569,8 @@ headers = {
     "currency": "USD",
     "vendor_url_or_name": "stripe.com",
     "item_description": "Monthly subscription",
-    "asset_type": "FIAT"
+    "asset_type": "FIAT",
+    "destination_address": "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1"
   }'`} {...codeProps} />
 
           {/* Verdicts */}
