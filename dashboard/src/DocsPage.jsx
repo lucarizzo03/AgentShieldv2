@@ -272,9 +272,7 @@ export default function DocsPage({ agentId, activeHmac, secretReveal, setSecretR
           {/* Installation */}
           <SectionHeader id="installation">Installation</SectionHeader>
           <P>Install the Python SDK using pip. Python 3.11 or later is required.</P>
-          <CodeBlock lang="bash" code={`pip install agentshield`} {...codeProps} />
-          <P>Or with uv:</P>
-          <CodeBlock lang="bash" code={`uv add agentshield`} {...codeProps} />
+          <CodeBlock lang="bash" code={`pip install agentshield-pythonv2`} {...codeProps} />
 
           {/* Quick Start */}
           <SectionHeader id="quickstart">Quick Start</SectionHeader>
@@ -284,7 +282,7 @@ export default function DocsPage({ agentId, activeHmac, secretReveal, setSecretR
 client = AgentShield(
     agent_id="\${AGENT_ID}",
     hmac_secret="\${HMAC_SECRET}",
-    base_url="\${API_BASE}",
+    base_url="https://agentshieldv2-backend-production.up.railway.app",
 )
 
 result = client.spend_request(SpendRequest(
@@ -295,6 +293,7 @@ result = client.spend_request(SpendRequest(
     vendor_url_or_name="delta.com",
     item_description="Economy seat JFK-LAX, Oct 12",
     asset_type="FIAT",
+    destination_address="0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
 ))
 
 print(result.verdict)   # SAFE | SUSPICIOUS | MALICIOUS
@@ -431,28 +430,43 @@ async def check_spend():
           {/* Error Handling */}
           <SectionHeader id="error-handling">Error Handling</SectionHeader>
           <P>The SDK surfaces distinct exception types for each failure mode.</P>
-          <CodeBlock lang="python" code={`from agentshield import (
-    AgentShieldBlockedError,   # 403 — hard deny
-    AgentShieldAuthError,      # 401/403 — credential issue
+          <CodeBlock lang="python" code={`from agentshield._exceptions import (
+    AgentShieldBlockedError,   # 403 — hard deny (MALICIOUS verdict)
+    AgentShieldAuthError,      # 401 — bad credentials
     AgentShieldAPIError,       # other 4xx/5xx
-    AgentShieldError,          # base class
 )
 
 try:
     result = client.spend_request(SpendRequest(...))
-except AgentShieldBlockedError:
+except AgentShieldBlockedError as e:
     # Verdict is MALICIOUS — do not retry
-    log.warning("Payment blocked by AgentShield policy")
-except AgentShieldAuthError:
-    # Rotate credentials and retry
+    print(e.block_code)   # e.g. "POLICY_HARD_DENY"
+    print(e.reasons)      # e.g. ["BUDGET_DAILY_LIMIT_EXCEEDED"]
+except AgentShieldAuthError as e:
+    # Bad or expired HMAC secret — rotate and retry
+    print(e)
     client.rotate_hmac()
 except AgentShieldAPIError as e:
-    log.error(f"API error {e.status_code}: {e.message}")`} {...codeProps} />
+    print(f"API error {e.status_code}: {e}")`} {...codeProps} />
           <Callout color="amber">
             <InlineCode>SUSPICIOUS</InlineCode> (202) responses are <strong>not</strong> exceptions — they are
             returned as normal <InlineCode>SpendResponse</InlineCode> objects. Only hard errors and
             auth failures raise exceptions.
           </Callout>
+          <SubHeader>Common block reasons</SubHeader>
+          <FieldTable rows={[
+            ["BUDGET_DAILY_LIMIT_EXCEEDED", "hard deny", "Check A", "Daily spend cap reached — resets at UTC midnight"],
+            ["VENDOR_MATCHED_BLOCKLIST", "hard deny", "Check B", "Vendor is on the agent's blocked vendors list"],
+            ["VENDOR_DOMAIN_PHISHING_PATTERN", "hard deny", "Check B", "Vendor domain looks like a spoofed/phishing URL"],
+            ["STABLECOIN_NOT_ALLOWED", "hard deny", "Check B", "Token not in agent's allowed_tokens list"],
+            ["NETWORK_NOT_ALLOWED", "hard deny", "Check B", "Network not in agent's allowed_networks list"],
+            ["DESTINATION_DENYLISTED", "hard deny", "Check B", "Destination address is explicitly blocked"],
+            ["LOOP_PATTERN_DETECTED", "suspicious", "Check A", "Same transaction fingerprint repeated ≥5× in 60 s"],
+            ["DESTINATION_BURST_DETECTED", "suspicious", "Check A", "Too many transactions to the same address in 60 s"],
+            ["AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD", "suspicious", "Check B", "Amount exceeds the agent's auto-approve limit"],
+            ["SEMANTIC_MISMATCH_HIGH", "suspicious", "Check C", "LLM detected goal/vendor/item mismatch"],
+            ["GOAL_DRIFT_DETECTED", "suspicious", "Check D", "Declared goal is outside the agent's allowed scopes"],
+          ]} />
 
           {/* Admin */}
           <SectionHeader id="admin">Admin API</SectionHeader>
