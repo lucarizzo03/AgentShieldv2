@@ -6,6 +6,71 @@ At the end of any session with meaningful changes, run `/context-save` to log wh
 
 ---
 
+### 2026-05-18 — Production hardening + activity scope fix
+
+**What was done:**
+- Added non-dev startup guard to reject default webhook HMAC secret
+- Hardened API security posture (restricted CORS + response security headers)
+- Fixed dashboard activity/stats behavior so history no longer disappears after UTC rollover by default
+
+**Security fix — webhook secret guard:**
+- `app/core/config.py`
+  - Added model-level validation:
+    - If `APP_ENV != dev` and `WEBHOOK_HMAC_SECRET` is still `dev-webhook-hmac-secret-change-me`, settings init fails fast
+- `tests/unit/test_config_security.py` (new)
+  - Non-dev + default webhook secret -> raises `ValidationError`
+  - Dev + default webhook secret -> allowed
+  - Non-dev + non-default webhook secret -> allowed
+
+**Security fix — CORS and headers:**
+- `app/core/config.py`
+  - Added `CORS_ALLOWED_ORIGINS` setting with parser/property (`settings.cors_origins`)
+- `app/main.py`
+  - Replaced permissive wildcard CORS with configured origins
+  - Restricted allowed methods/headers and exposed response headers
+  - Added response hardening headers:
+    - `Content-Security-Policy`
+    - `X-Frame-Options: DENY`
+    - `X-Content-Type-Options: nosniff`
+    - `Referrer-Policy: no-referrer`
+    - `Permissions-Policy`
+- `.env.example`
+  - Added `CORS_ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173`
+- `tests/integration/test_security_headers.py` (new)
+  - Asserts security headers exist
+  - Asserts untrusted origin does not get CORS allow-origin
+
+**Dashboard activity/stats scope fix:**
+- `app/api/v1/routes/dashboard.py`
+  - Added query support for activity/stats:
+    - `scope=all_time|today_utc` (default `all_time`)
+    - optional `start_at`, `end_at` (UTC range)
+  - Added range validation (`end_at >= start_at`)
+  - Introduced count modes:
+    - `all_time` (default)
+    - `today_utc`
+    - `range_utc` (when date bounds provided)
+  - Updated row selection helpers to use scoped query strategy instead of hardcoded today-only filter
+- `app/api/v1/schemas/dashboard.py`
+  - `ActivityFeedResponse.count_mode` now accepts `today_utc | all_time | range_utc`
+- `tests/integration/test_dashboard_queue.py`
+  - Existing today-alignment test now explicitly requests `scope=today_utc`
+  - Added new test that verifies default activity scope is `all_time` and includes historical rows
+
+**Verification executed:**
+- `uv run pytest tests/unit/test_config_security.py tests/unit/test_engine.py` -> **20 passed**
+- `uv run pytest tests/integration/test_security_headers.py tests/integration/test_spend_hitl_flow.py` -> **5 passed**
+- `uv run pytest tests/integration/test_dashboard_queue.py tests/integration/test_spend_hitl_flow.py` -> **6 passed**
+- `uv run pytest tests/integration/test_full_scenarios.py tests/integration/test_agents_settings_update.py` -> **22 passed**
+
+**Current state:**
+- Non-dev deployments fail fast if webhook secret remains default
+- CORS is configurable and no longer globally wildcard by default
+- Browser-facing responses include baseline security headers
+- Dashboard activity/stats default to all-time, with optional today/range filtering
+
+---
+
 ### 2026-05-18 — Contract fixes + async DB migration
 
 **What was done:**

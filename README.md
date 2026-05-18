@@ -12,10 +12,6 @@ Built after a buying agent tried to make a bad purchase.
 
 Primary scope: stablecoin payments (`USDC`/`USDT`) with fiat support available.
 
----
-
-> Note: This README is documentation-only and does not affect runtime behavior.
-
 ## How It Works
 
 Every spend request goes through four checks. Each check looks at a different dimension of risk:
