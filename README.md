@@ -12,6 +12,37 @@ Built after a buying agent tried to make a bad purchase.
 
 Primary scope: stablecoin payments (`USDC`/`USDT`) with fiat support available.
 
+## Quick Start (Python SDK)
+
+```bash
+pip install agentshield-pythonv2
+```
+
+```python
+from agentshield import AgentShield, SpendRequest
+
+client = AgentShield(
+    agent_id="agt_...",
+    hmac_secret="sk_live_...",
+    base_url="https://agentshieldv2-backend-production.up.railway.app",
+)
+
+result = client.spend_request(SpendRequest(
+    agent_id="agt_...",
+    declared_goal="Book a flight from JFK to LAX",
+    amount_cents=25000,
+    currency="USD",
+    vendor_url_or_name="delta.com",
+    item_description="Economy seat JFK-LAX, Oct 12",
+    asset_type="FIAT",
+    destination_address="0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
+))
+
+print(result.verdict)  # SAFE | SUSPICIOUS | MALICIOUS
+```
+
+Get your `agent_id` and `hmac_secret` from the [dashboard](https://agentshieldv2-backend-production.up.railway.app) after creating an agent.
+
 ## How It Works
 
 Every spend request goes through four checks. Each check looks at a different dimension of risk:
@@ -23,7 +54,7 @@ Every spend request goes through four checks. Each check looks at a different di
 | **C — Semantic** | Claude Haiku | Does the stated goal actually match what's being purchased? |
 | **D — Goal Drift** | Claude Haiku | Is this purchase within what the agent is supposed to be doing at all? |
 
-After all four checks run, the results are combined into one verdict:
+Checks A and B run sequentially — if either hard-denies, C and D are skipped entirely (no Claude API call). C and D run in parallel only when A and B both pass. Results are combined into one verdict:
 - Any check returns a hard block → `MALICIOUS`
 - Any check raises a concern → `SUSPICIOUS` (goes to human review)
 - All checks pass → `SAFE`
@@ -39,8 +70,7 @@ flowchart TD
     parallel --> checkD[D: Claude Haiku Goal Drift]
     checkC --> synth[VerdictSynthesis]
     checkD --> synth
-    synth -->|SAFE| pay[PaymentAdapter]
-    pay --> ok200[200 Approved + Executed]
+    synth -->|SAFE| ok200[200 Approved — Agent Executes]
     synth -->|MALICIOUS| deny403[403 Blocked]
     synth -->|SUSPICIOUS| pending[CreatePendingSpend]
     pending --> email[HITL Email + Dashboard]
@@ -247,7 +277,7 @@ Submits a spend intent for evaluation.
 }
 ```
 
-For `asset_type: STABLECOIN`, `stablecoin_symbol` and `network` are required; `destination_address` is optional (omit for Locus MPP vendors). Supported stablecoin symbols: `USDC`, `USDT`, `USDC.e`, `USDC.b`. Supported networks: `ethereum`, `base`, `solana`, `polygon`, `arbitrum`.
+`destination_address` is required for all requests. For `asset_type: STABLECOIN`, `stablecoin_symbol` and `network` are also required. Supported stablecoin symbols: `USDC`, `USDT`, `USDC.e`, `USDC.b`. Supported networks: `ethereum`, `base`, `solana`, `polygon`, `arbitrum`.
 
 **Responses:**
 
@@ -423,7 +453,7 @@ Stablecoin rules:
   network not in allowed_networks              → hard deny
   address in blocked_destination_addresses     → hard deny
   address NOT in allowed_destination_addresses → suspicious (when list non-empty)
-  address missing (non-MPP vendor)             → suspicious
+  address missing                              → suspicious
 ```
 
 ### Check C — Semantic (Claude Haiku)
@@ -487,8 +517,8 @@ The React dashboard (`dashboard/`) covers:
 - **Overview** — stats cards (transactions today, blocked, pending, approved) + request activity chart
 - **Activity** — full audit log with expandable Check A/B/C/D detail panel per transaction
 - **Approvals** — live HITL queue with approve/deny buttons, SLM score bar, Redis/policy/goal-drift signals, countdown timer
-- **Integration** — generated Python signing snippet pre-filled with your agent credentials
-- **Settings** — HITL preferences (coming soon)
+- **Docs** — interactive SDK and API reference pre-filled with your agent credentials
+- **Settings** — coming soon
 
 Auto-refreshes every 2 seconds. HMAC secrets are stored in `localStorage` keyed by `agent_id`.
 
