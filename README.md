@@ -1,5 +1,13 @@
 # AgentShield
 
+**[→ Live Dashboard](https://agentshieldv2-dashboard-production.up.railway.app)** — sign in, create an agent, and start making requests in minutes.
+
+Questions or issues → **rizzoluca2003@gmail.com**
+
+> **Early Access** — `SAFE` and `MALICIOUS` verdicts are fully live. The `SUSPICIOUS` / human review flow is functional but still being polished (generalized email sender + SDK polling improvements in progress). Feedback welcome.
+
+---
+
 AgentShield is a spending firewall for AI agents. When an agent wants to make a payment, it has to ask AgentShield first. AgentShield runs four checks on the request and responds with one of three answers:
 
 - **SAFE (`200`)** — cleared, agent may proceed with the payment
@@ -41,7 +49,7 @@ result = client.spend_request(SpendRequest(
 print(result.verdict)  # SAFE | SUSPICIOUS | MALICIOUS
 ```
 
-Get your `agent_id` and `hmac_secret` from the [dashboard](https://agentshieldv2-backend-production.up.railway.app) after creating an agent.
+Get your `agent_id` and `hmac_secret` from the [dashboard](https://agentshieldv2-dashboard-production.up.railway.app) after creating an agent.
 
 ## How It Works
 
