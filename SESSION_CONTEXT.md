@@ -67,6 +67,35 @@ At the end of any session with meaningful changes, run `/context-save` to log wh
 
 ## Session Log
 
+### 2026-05-17 — CLAUDE.md audit + prompt injection fixes
+
+**What was done:**
+- Full codebase read to audit CLAUDE.md accuracy; found and fixed 8 stale/wrong items
+- Ran complete prompt injection scan across all surfaces where user-controlled data touches prompts, HTML, logs, or external calls
+- Fixed Critical: HTML/XSS injection in HITL email (`notifier.py`) — vendor, goal, item were interpolated raw into HTML
+- Fixed High: semantic prompt injection in SLM client — added XML delimiters + system prompt data-boundary note + 500-char item truncation
+- Fixed merge conflict after rebase onto remote main (modify/delete on `test_isolated.db`)
+
+**Files changed:**
+- `CLAUDE.md` — updated architecture diagram (added Check D), auth section (Auth0 Bearer replacing "JWT Bearer", removed dev bypass row, HITL auth detail), Redis key map (removed deleted OTP key), dashboard routes (Integration→Docs, Auth0 login views, correct localStorage key), added full API endpoints table, updated HITL flow (status poll URL, callback mechanism), added `agent_callback_url` SSRF gotcha
+- `app/services/hitl/notifier.py` — added `html.escape()` on vendor/goal/item before HTML interpolation; newline-strip for plain text body and subject line
+- `app/services/slm/client.py` — added `_xml_escape()` helper and `_MAX_ITEM_LEN=500`; updated all 9 few-shot examples to XML `<transaction>` format; added data-boundary note to system prompt; `semantic_alignment()` now truncates item to 500 chars and builds user message as XML
+- `tests/unit/test_engine.py` — `test_engine_semantic_aligned_safe` updated to use weather API scenario ($0.02) instead of $5 flight (Claude correctly flags $5 flight as `AMOUNT_UNREASONABLY_LOW` with new stricter prompt)
+
+**Key decisions / gotchas discovered:**
+- `html.escape()` is stdlib — zero new dependencies for the HTML injection fix
+- XML tag injection (breaking out of `<item>` via `</item>` in user data) requires `_xml_escape()` separate from json.dumps — json.dumps does not escape `<` or `>`
+- Changing the system prompt format invalidates the Anthropic prompt cache once (ephemeral cache); acceptable one-time cost
+- The test's default `amount_cents=500` for a flight is semantically wrong with the more careful new prompt — fixed by switching the semantic test to a cheap API call scenario that's in the few-shot examples
+- Remote had deleted `test_isolated.db` in a cleanup commit; merge conflict was modify/delete, resolved by accepting the deletion
+
+**Current state / next steps:**
+- All 56 tests passing after changes
+- Issues #3 (allowed_scopes prompt injection, medium) and #4 (log injection, low) not yet fixed — discussed but not implemented
+- Branch is up to date with origin/main
+
+---
+
 ### 2026-05-17 — decision engine framing + docs sweep
 
 **What was done:**
