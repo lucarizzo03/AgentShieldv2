@@ -5,9 +5,10 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from redis.asyncio import Redis
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.api.v1.schemas.spend import SpendRequest
+from app.api.v1.schemas.spend import HitlChannel, SpendRequest
 from app.core.config import get_settings
 from app.core.metrics import increment
 from app.core.security import AuthContext, verify_agent_auth
@@ -127,12 +128,12 @@ def _build_agent_feedback(*, verdict: str, reasons: list[str], tri) -> dict:
     }
 
 
-def _record_idempotency_replay(session: Session, *, request_id: str) -> None:
-    original = session.exec(
+async def _record_idempotency_replay(session: AsyncSession, *, request_id: str) -> None:
+    original = (await session.exec(
         select(SpendAuditLog)
         .where(SpendAuditLog.request_id == request_id)
         .order_by(SpendAuditLog.created_at.desc())
-    ).first()
+    )).first()
     if not original:
         return
 
@@ -170,7 +171,7 @@ def _record_idempotency_replay(session: Session, *, request_id: str) -> None:
             "verdict": original.verdict,
         },
     )
-    session.commit()
+    await session.commit()
 
 
 @router.post("/spend-request")
@@ -178,7 +179,7 @@ async def spend_request(
     payload: SpendRequest,
     response: Response,
     auth_context: AuthContext = Depends(verify_agent_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
     if auth_context.agent_id and auth_context.agent_id != payload.agent_id:
@@ -187,7 +188,7 @@ async def spend_request(
             detail="Authenticated agent_id does not match request payload agent_id",
         )
 
-    agent = session.exec(select(Agent).where(Agent.agent_id == payload.agent_id)).first()
+    agent = (await session.exec(select(Agent).where(Agent.agent_id == payload.agent_id))).first()
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     if agent.status != "ACTIVE":
@@ -200,7 +201,7 @@ async def spend_request(
         replay_body["idempotency_replay"] = True
         replay_body["idempotency_note"] = "Returned cached decision for this idempotency key. No new evaluation was performed."
         if replay_body.get("request_id"):
-            _record_idempotency_replay(session, request_id=str(replay_body["request_id"]))
+            await _record_idempotency_replay(session, request_id=str(replay_body["request_id"]))
         response.headers["x-idempotency-replay"] = "true"
         if replay_body.get("request_id"):
             response.headers["x-original-request-id"] = str(replay_body["request_id"])
@@ -268,7 +269,7 @@ async def spend_request(
                 "reasons": tri.reasons,
             },
         )
-        session.commit()
+        await session.commit()
         try:
             if tri.quantitative_result.get("budget_reserved", False):
                 # Reservation was made atomically during the budget check — just refresh TTL.
@@ -329,7 +330,7 @@ async def spend_request(
                 "reasons": tri.reasons,
             },
         )
-        session.commit()
+        await session.commit()
         if tri.quantitative_result.get("budget_reserved", False):
             try:
                 await rollback_budget_reservation(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
@@ -369,7 +370,7 @@ async def spend_request(
             "goal_drift_result": tri.goal_drift_result,
         },
         state="WAITING_HUMAN",
-        hitl_channel="email+dashboard",
+        hitl_channel=HitlChannel.EMAIL_DASHBOARD.value,
         hitl_contact=None,
         expires_at=now + timedelta(seconds=settings.hitl_default_timeout_seconds),
     )
@@ -438,7 +439,7 @@ async def spend_request(
             "expires_at": pending.expires_at.isoformat(),
         },
     )
-    session.commit()
+    await session.commit()
     if tri.quantitative_result.get("budget_reserved", False):
         try:
             await rollback_budget_reservation(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
@@ -456,7 +457,7 @@ async def spend_request(
         "verdict": "SUSPICIOUS",
         "hitl": {
             "state": "WAITING_HUMAN_REVIEW",
-            "channel": "email+dashboard",
+            "channel": HitlChannel.EMAIL_DASHBOARD.value,
             "requested_at": now,
             "expires_at": pending.expires_at,
         },
@@ -477,13 +478,13 @@ async def spend_request(
 async def get_spend_request_status(
     request_id: str,
     auth_context: AuthContext = Depends(verify_agent_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ):
-    audit = session.exec(
+    audit = (await session.exec(
         select(SpendAuditLog)
         .where(SpendAuditLog.request_id == request_id)
         .order_by(SpendAuditLog.created_at.desc())
-    ).first()
+    )).first()
     if not audit:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
 
@@ -514,7 +515,7 @@ async def get_spend_request_status(
             "resolved": True,
         }
     else:
-        pending = session.exec(select(PendingSpend).where(PendingSpend.request_id == request_id)).first()
+        pending = (await session.exec(select(PendingSpend).where(PendingSpend.request_id == request_id))).first()
         if not pending:
             return {
                 "request_id": request_id,

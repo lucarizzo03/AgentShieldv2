@@ -2,9 +2,10 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.db.postgres import engine
+from app.db.postgres import async_engine
 from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
@@ -14,18 +15,18 @@ logger = logging.getLogger(__name__)
 _SWEEP_INTERVAL = 60
 
 
-def _sweep_once() -> int:
+async def _sweep_once() -> int:
     """Expire overdue PendingSpend rows. Returns number of rows expired."""
     now = datetime.now(timezone.utc)
     expired_count = 0
 
-    with Session(engine) as session:
-        rows = session.exec(
+    async with AsyncSession(async_engine) as session:
+        rows = (await session.exec(
             select(PendingSpend).where(
                 PendingSpend.state == "WAITING_HUMAN",
                 PendingSpend.expires_at <= now,
             )
-        ).all()
+        )).all()
 
         for pending in rows:
             pending.state = "EXPIRED"
@@ -53,12 +54,12 @@ def _sweep_once() -> int:
                 status="EXPIRED",
             ))
 
-            notification = session.exec(
+            notification = (await session.exec(
                 select(DashboardNotification).where(
                     DashboardNotification.request_id == pending.request_id,
                     DashboardNotification.status.in_(["OPEN", "ACKED"]),  # type: ignore[attr-defined]
                 )
-            ).first()
+            )).first()
             if notification:
                 notification.status = "RESOLVED"
                 notification.acknowledged_by = "system:expiry-sweeper"
@@ -69,7 +70,7 @@ def _sweep_once() -> int:
             expired_count += 1
 
         if expired_count:
-            session.commit()
+            await session.commit()
             logger.info("HITL expiry sweep: expired %d request(s)", expired_count)
 
     return expired_count
@@ -81,7 +82,7 @@ async def run_expiry_sweeper() -> None:
     while True:
         await asyncio.sleep(_SWEEP_INTERVAL)
         try:
-            count = await asyncio.to_thread(_sweep_once)
+            count = await _sweep_once()
             if count:
                 logger.info("Expired %d stale HITL request(s)", count)
         except Exception:

@@ -8,7 +8,8 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.v1.routes.agents import router as agents_router
 from app.api.v1.routes.dashboard import router as dashboard_router
@@ -16,8 +17,9 @@ from app.api.v1.routes.health import router as health_router
 from app.api.v1.routes.hitl import router as hitl_router
 from app.api.v1.routes.onboarding import router as onboarding_router
 from app.api.v1.routes.spend import router as spend_router
+from app.core.config import get_settings
 from app.core.logging import configure_logging
-from app.db.postgres import create_db_and_tables, engine
+from app.db.postgres import async_engine, create_db_and_tables
 from app.models.agent import Agent
 from app.models.spend_audit_log import SpendAuditLog
 from app.services.hitl.expiry_sweeper import run_expiry_sweeper
@@ -25,7 +27,7 @@ from app.services.hitl.expiry_sweeper import run_expiry_sweeper
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    create_db_and_tables()
+    await create_db_and_tables()
     sweeper = asyncio.create_task(run_expiry_sweeper())
     yield
     sweeper.cancel()
@@ -37,12 +39,23 @@ async def lifespan(app: FastAPI):
 
 def create_app() -> FastAPI:
     configure_logging()
+    settings = get_settings()
     app = FastAPI(title="AgentShield", version="0.1.0", lifespan=lifespan)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=settings.cors_origins,
+        allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "x-agent-id",
+            "x-timestamp",
+            "x-signature",
+            "x-webhook-signature",
+            "x-webhook-timestamp",
+            "x-request-id",
+        ],
+        expose_headers=["x-request-id", "x-latency-ms"],
     )
 
     @app.exception_handler(RequestValidationError)
@@ -69,8 +82,8 @@ def create_app() -> FastAPI:
                     asset_type = payload.get("asset_type")
                     if asset_type not in {"STABLECOIN", "FIAT"}:
                         asset_type = "STABLECOIN"
-                    with Session(engine) as session:
-                        agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
+                    async with AsyncSession(async_engine) as session:
+                        agent = (await session.exec(select(Agent).where(Agent.agent_id == agent_id))).first()
                         if agent:
                             logged_request_id = f"req_val_{uuid4().hex[:18]}"
                             session.add(
@@ -94,7 +107,7 @@ def create_app() -> FastAPI:
                                     status="BLOCKED",
                                 )
                             )
-                            session.commit()
+                            await session.commit()
 
         return JSONResponse(
             status_code=422,
@@ -114,6 +127,13 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         response.headers["x-request-id"] = request_id
         response.headers["x-latency-ms"] = f"{(perf_counter() - start) * 1000:.2f}"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+        )
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Permissions-Policy"] = "geolocation=(), camera=(), microphone=()"
         return response
 
     app.include_router(health_router)

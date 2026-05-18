@@ -10,7 +10,8 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
 from redis.asyncio import Redis
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +105,12 @@ async def _resolve_pending(
     *,
     request_id: str,
     payload: HitlResolveRequest,
-    session: Session,
+    session: AsyncSession,
     redis: Redis,
 ):
-    pending = session.exec(
+    pending = (await session.exec(
         select(PendingSpend).where(PendingSpend.request_id == request_id).with_for_update()
-    ).first()
+    )).first()
     if not pending:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending request not found")
 
@@ -177,9 +178,9 @@ async def _resolve_pending(
             event_payload={"request_id": request_id, "resolver_id": payload.resolver_id},
         )
 
-    notification = session.exec(
+    notification = (await session.exec(
         select(DashboardNotification).where(DashboardNotification.request_id == request_id)
-    ).first()
+    )).first()
     if notification and notification.status in {"OPEN", "ACKED"}:
         notification.status = "RESOLVED"
         notification.acknowledged_by = payload.resolver_id
@@ -188,7 +189,7 @@ async def _resolve_pending(
         session.add(notification)
 
     session.add(pending)
-    session.commit()
+    await session.commit()
 
     if payload.decision == "APPROVE":
         try:
@@ -237,7 +238,7 @@ async def resolve_hitl_request(
     request_id: str,
     payload: HitlResolveRequest,
     _: None = Depends(verify_hitl_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
     return await _resolve_pending(request_id=request_id, payload=payload, session=session, redis=redis)
@@ -249,7 +250,7 @@ async def email_resolve(
     request_id: str,
     decision: str,
     token: str,
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
     settings = get_settings()

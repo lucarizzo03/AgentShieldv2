@@ -1,13 +1,14 @@
 from datetime import datetime, timezone
 
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.security import UserAuthContext
 from app.models.user import User
 
 
-def get_or_create_user(session: Session, auth: UserAuthContext) -> User:
-    user = session.exec(select(User).where(User.auth_subject == auth.sub)).first()
+async def get_or_create_user(session: AsyncSession, auth: UserAuthContext) -> User:
+    user = (await session.exec(select(User).where(User.auth_subject == auth.sub))).first()
     now = datetime.now(timezone.utc)
     if user:
         changed = False
@@ -20,8 +21,8 @@ def get_or_create_user(session: Session, auth: UserAuthContext) -> User:
         if changed:
             user.updated_at = now
             session.add(user)
-            session.commit()
-            session.refresh(user)
+            await session.commit()
+            await session.refresh(user)
         return user
 
     user = User(
@@ -32,6 +33,6 @@ def get_or_create_user(session: Session, auth: UserAuthContext) -> User:
         updated_at=now,
     )
     session.add(user)
-    session.commit()
-    session.refresh(user)
+    await session.commit()
+    await session.refresh(user)
     return user

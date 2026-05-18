@@ -221,8 +221,14 @@ def test_dashboard_stats_and_activity_are_aligned_for_today() -> None:
         session.commit()
 
     with TestClient(app) as client:
-        stats_resp = client.get("/v1/dashboard/agents/agent_dash/stats", headers={"Authorization": "Bearer mock-token"})
-        activity_resp = client.get("/v1/dashboard/agents/agent_dash/activity", headers={"Authorization": "Bearer mock-token"})
+        stats_resp = client.get(
+            "/v1/dashboard/agents/agent_dash/stats?scope=today_utc",
+            headers={"Authorization": "Bearer mock-token"},
+        )
+        activity_resp = client.get(
+            "/v1/dashboard/agents/agent_dash/activity?scope=today_utc",
+            headers={"Authorization": "Bearer mock-token"},
+        )
 
     assert stats_resp.status_code == 200
     assert activity_resp.status_code == 200
@@ -233,5 +239,74 @@ def test_dashboard_stats_and_activity_are_aligned_for_today() -> None:
     assert activity_json["total_transactions_today"] == 2
     assert len(activity_json["activity"]) == 2
     assert activity_json["count_mode"] == "today_utc"
+
+    app.dependency_overrides.clear()
+
+
+def test_dashboard_activity_defaults_to_all_time_scope() -> None:
+    _reset_db()
+    _seed_agent()
+    app.dependency_overrides[verify_user_auth] = _mock_user_auth
+
+    now = datetime.now(timezone.utc)
+    yesterday = now - timedelta(days=1)
+    with Session(engine) as session:
+        session.add(
+            SpendAuditLog(
+                request_id="req_today",
+                agent_id="agent_dash",
+                declared_goal="Goal",
+                amount_cents=1000,
+                currency="USD",
+                asset_type="STABLECOIN",
+                stablecoin_symbol="USDC",
+                network="base",
+                destination_address="0x1",
+                vendor_url_or_name="vendor.one",
+                item_description="item",
+                quantitative_result={},
+                policy_result={},
+                semantic_result={},
+                goal_drift_result={},
+                verdict="SAFE",
+                status="APPROVED_EXECUTED",
+                created_at=now,
+            )
+        )
+        session.add(
+            SpendAuditLog(
+                request_id="req_yesterday",
+                agent_id="agent_dash",
+                declared_goal="Goal",
+                amount_cents=1200,
+                currency="USD",
+                asset_type="STABLECOIN",
+                stablecoin_symbol="USDC",
+                network="base",
+                destination_address="0x2",
+                vendor_url_or_name="vendor.two",
+                item_description="item",
+                quantitative_result={},
+                policy_result={},
+                semantic_result={},
+                goal_drift_result={},
+                verdict="SAFE",
+                status="APPROVED_EXECUTED",
+                created_at=yesterday,
+            )
+        )
+        session.commit()
+
+    with TestClient(app) as client:
+        activity_resp = client.get(
+            "/v1/dashboard/agents/agent_dash/activity",
+            headers={"Authorization": "Bearer mock-token"},
+        )
+
+    assert activity_resp.status_code == 200
+    activity_json = activity_resp.json()
+    assert activity_json["count_mode"] == "all_time"
+    assert activity_json["total_transactions_today"] == 2
+    assert len(activity_json["activity"]) == 2
 
     app.dependency_overrides.clear()

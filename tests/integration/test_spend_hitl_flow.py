@@ -11,6 +11,7 @@ from app.core.config import get_settings
 from app.db.postgres import engine
 from app.db.redis import get_redis
 from app.main import app
+from app.api.v1.schemas.spend import HitlChannel, SpendPendingResponse
 from app.models import Agent, PendingSpend
 from app.models.dashboard_notification import DashboardNotification
 from app.services.slm.client import AnthropicSemanticClient
@@ -225,6 +226,8 @@ def test_suspicious_spend_goes_to_hitl_and_approves() -> None:
         content, headers = _sign_agent(spend_body)
         spend_resp = client.post("/v1/spend-request", content=content, headers=headers)
         assert spend_resp.status_code == 202
+        pending_payload = SpendPendingResponse.model_validate(spend_resp.json())
+        assert pending_payload.hitl.channel == HitlChannel.EMAIL_DASHBOARD
         request_id = spend_resp.json()["request_id"]
 
         with Session(engine) as session:
