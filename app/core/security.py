@@ -7,10 +7,12 @@ from typing import Any
 
 import jwt
 from fastapi import Header, HTTPException, Request, status
-from sqlmodel import Session, select
+from fastapi.concurrency import run_in_threadpool
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import get_settings
-from app.db.postgres import engine
+from app.db.postgres import async_engine
 from app.models.agent import Agent
 
 
@@ -121,6 +123,22 @@ def _verify_auth0_bearer(token: str) -> UserAuthContext:
     )
 
 
+async def _load_agent_hmac_secret(agent_id: str) -> str:
+    async with AsyncSession(async_engine) as session:
+        agent = (await session.exec(select(Agent).where(Agent.agent_id == agent_id))).first()
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unknown agent_id",
+        )
+    if not agent.hmac_secret:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Agent has no HMAC secret — rotate credentials first",
+        )
+    return agent.hmac_secret
+
+
 async def verify_agent_auth(
     request: Request,
     authorization: str | None = Header(default=None),
@@ -135,7 +153,7 @@ async def verify_agent_auth(
     # validates it exists and is active before running checks).
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        user_ctx = _verify_auth0_bearer(token)
+        user_ctx = await run_in_threadpool(_verify_auth0_bearer, token)
         return AuthContext(principal_id=user_ctx.sub, method="auth0", agent_id=x_agent_id)
 
     # HMAC-SHA256 — signed by real agent SDK.
@@ -151,19 +169,7 @@ async def verify_agent_auth(
                 x_agent_id,
             ]
         )
-        with Session(engine) as session:
-            agent = session.exec(select(Agent).where(Agent.agent_id == x_agent_id)).first()
-            if not agent:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Unknown agent_id",
-                )
-            if not agent.hmac_secret:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Agent has no HMAC secret — rotate credentials first",
-                )
-            expected_secret = agent.hmac_secret
+        expected_secret = await _load_agent_hmac_secret(x_agent_id)
 
         if not _verify_hmac(expected_secret, canonical_message, x_signature):
             raise HTTPException(
@@ -183,7 +189,7 @@ async def verify_user_auth(
 ) -> UserAuthContext:
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        return _verify_auth0_bearer(token)
+        return await run_in_threadpool(_verify_auth0_bearer, token)
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Missing user authentication. Provide Auth0 Bearer token.",
@@ -229,7 +235,7 @@ async def verify_hitl_auth(
     """Accept either Auth0 Bearer (dashboard operators) or webhook HMAC (external integrations)."""
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        _verify_auth0_bearer(token)
+        await run_in_threadpool(_verify_auth0_bearer, token)
         return
 
     if x_webhook_signature and x_webhook_timestamp:

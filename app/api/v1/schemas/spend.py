@@ -1,7 +1,14 @@
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+
+
+class HitlChannel(str, Enum):
+    SMS = "sms"
+    DASHBOARD = "dashboard"
+    EMAIL_DASHBOARD = "email+dashboard"
 
 
 class SpendRequest(BaseModel):
@@ -67,7 +74,7 @@ class SpendBlockedResponse(BaseModel):
 
 class HitlStatePayload(BaseModel):
     state: Literal["WAITING_HUMAN_REVIEW", "WAITING_HUMAN_TEXT_RESPONSE"]
-    channel: Literal["sms", "dashboard"]
+    channel: HitlChannel
     requested_at: datetime
     expires_at: datetime
 

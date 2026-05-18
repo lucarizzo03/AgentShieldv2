@@ -3,7 +3,8 @@ from secrets import token_urlsafe
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.v1.schemas.agent import (
     AgentCreateRequest,
@@ -31,19 +32,19 @@ def _cents_to_usd_setting(cents: int) -> int:
 async def create_agent(
     payload: AgentCreateRequest,
     auth: UserAuthContext = Depends(verify_user_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ):
     if auth.agent_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Agent credentials cannot create agents. Sign in as a user.",
         )
-    user = get_or_create_user(session, auth)
-    existing = session.exec(
+    user = await get_or_create_user(session, auth)
+    existing = (await session.exec(
         select(Agent)
         .where(Agent.display_name == payload.agent_name)
         .where(Agent.owner_user_id == user.id)
-    ).first()
+    )).first()
     if existing:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent name already exists")
 
@@ -75,7 +76,7 @@ async def create_agent(
         event_type="AGENT_CREATED",
         event_payload={"display_name": payload.agent_name},
     )
-    session.commit()
+    await session.commit()
 
     return {
         "agent_id": agent_id,
@@ -88,19 +89,19 @@ async def create_agent(
 @router.get("/agents", response_model=AgentListResponse)
 async def list_agents(
     auth: UserAuthContext = Depends(verify_user_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ):
     if auth.agent_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Agent credentials cannot list user agents. Sign in as a user.",
         )
-    user = get_or_create_user(session, auth)
-    agents = session.exec(
+    user = await get_or_create_user(session, auth)
+    agents = (await session.exec(
         select(Agent)
         .where(Agent.owner_user_id == user.id)
         .order_by(Agent.created_at.desc())
-    ).all()
+    )).all()
     return {
         "agents": [
             {
@@ -125,12 +126,12 @@ async def update_agent_settings(
     agent_id: str,
     payload: AgentSettingsUpdateRequest,
     auth: UserAuthContext = Depends(verify_user_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ):
-    user = get_or_create_user(session, auth)
-    agent = session.exec(
+    user = await get_or_create_user(session, auth)
+    agent = (await session.exec(
         select(Agent).where(Agent.agent_id == agent_id).where(Agent.owner_user_id == user.id)
-    ).first()
+    )).first()
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
@@ -160,7 +161,7 @@ async def update_agent_settings(
             "auto_approve_under_usd": payload.auto_approve_under_usd,
         },
     )
-    session.commit()
+    await session.commit()
     return {"agent_id": agent.agent_id, "updated_at": now}
 
 
@@ -169,18 +170,18 @@ async def update_agent_scopes(
     agent_id: str,
     payload: AgentScopesUpdateRequest,
     auth: UserAuthContext = Depends(verify_user_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ):
-    user = get_or_create_user(session, auth)
-    agent = session.exec(
+    user = await get_or_create_user(session, auth)
+    agent = (await session.exec(
         select(Agent).where(Agent.agent_id == agent_id).where(Agent.owner_user_id == user.id)
-    ).first()
+    )).first()
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     agent.allowed_scopes = payload.allowed_scopes
     agent.updated_at = datetime.now(timezone.utc)
     session.add(agent)
-    session.commit()
+    await session.commit()
     return {"agent_id": agent_id, "allowed_scopes": agent.allowed_scopes}
 
 
@@ -188,12 +189,12 @@ async def update_agent_scopes(
 async def rotate_agent_hmac(
     agent_id: str,
     auth: AuthContext = Depends(verify_agent_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ):
     if auth.agent_id != agent_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot rotate another agent's credentials")
     # Rotation stays agent-authenticated, not user-authenticated.
-    agent = session.exec(select(Agent).where(Agent.agent_id == agent_id)).first()
+    agent = (await session.exec(select(Agent).where(Agent.agent_id == agent_id))).first()
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
 
@@ -202,7 +203,7 @@ async def rotate_agent_hmac(
     agent.hmac_secret_rotated_at = now
     agent.updated_at = now
     session.add(agent)
-    session.commit()
+    await session.commit()
     return {
         "agent_id": agent.agent_id,
         "hmac_secret": agent.hmac_secret,

@@ -60,7 +60,7 @@ class ActivityItem(BaseModel):
 class ActivityFeedResponse(BaseModel):
     agent_id: str
     total_transactions_today: int
-    count_mode: Literal["today_utc"]
+    count_mode: Literal["today_utc", "all_time", "range_utc"]
     activity: list[ActivityItem]
 
 

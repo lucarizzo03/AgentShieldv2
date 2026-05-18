@@ -6,6 +6,99 @@ At the end of any session with meaningful changes, run `/context-save` to log wh
 
 ---
 
+### 2026-05-18 — Contract fixes + async DB migration
+
+**What was done:**
+- Fixed HITL 202 response contract drift between schema and runtime
+- Enforced `destination_address` requirement for both FIAT and STABLECOIN
+- Removed legacy Locus destination exception behavior
+- Eliminated auth-path event loop blocking and then completed full async DB migration across API paths
+
+**HITL schema/runtime contract fix:**
+- `app/api/v1/schemas/spend.py`
+  - Added `HitlChannel` enum:
+    - `sms`
+    - `dashboard`
+    - `email+dashboard`
+  - Updated `HitlStatePayload.channel` to use `HitlChannel`
+- `app/api/v1/routes/spend.py`
+  - Runtime HITL payload now uses `HitlChannel.EMAIL_DASHBOARD.value` (shared source of truth)
+  - `PendingSpend.hitl_channel` assignment aligned to same enum value
+- `tests/integration/test_spend_hitl_flow.py`
+  - Added contract assertion: parse 202 body with `SpendPendingResponse.model_validate(...)`
+  - Asserted `hitl.channel == HitlChannel.EMAIL_DASHBOARD`
+
+**Destination-address policy change:**
+- `app/api/v1/schemas/spend.py`
+  - `SpendRequest` now requires `destination_address` for all asset types
+- `app/policy/checks/policy_db.py`
+  - Removed `_is_locus_mpp_vendor` destination bypass
+  - Missing destination now consistently emits `DESTINATION_ADDRESS_MISSING`
+- `app/api/v1/routes/spend.py`
+  - Removed `DESTINATION_DEFERRED_MPP` from `_CHECK_REASON_GROUPS`
+
+**Tests updated for destination change:**
+- `tests/unit/test_policy_checks.py`
+  - Locus missing-destination case updated to suspicious + `DESTINATION_ADDRESS_MISSING`
+- `tests/integration/test_full_scenarios.py`
+  - FIAT fixtures now include destination where needed
+  - Missing-destination scenarios now assert `422` validation errors
+- `tests/e2e/test_live_spend.py`
+  - Added `destination_address` to FIAT live payloads
+
+**Auth/event-loop bottleneck fix (intermediate):**
+- `app/core/security.py`
+  - Added threadpool offload for blocking verification paths:
+    - Auth0 bearer verification in auth dependencies
+    - agent secret lookup helper
+
+**Long-term async DB migration (completed):**
+- `app/db/postgres.py`
+  - Added async engine/session stack (`async_engine`, `AsyncSessionLocal`)
+  - `get_session()` now yields `AsyncSession`
+  - `create_db_and_tables()` converted to async
+  - Retained sync `engine` for compatibility paths/tests
+- `app/main.py`
+  - Lifespan now awaits async table creation
+  - Validation exception audit logging uses async session
+- `app/core/security.py`
+  - HMAC secret fetch now uses async DB query (`AsyncSession(async_engine)`)
+- Converted route DB dependencies from sync `Session` to `AsyncSession` with awaited queries/commits:
+  - `app/api/v1/routes/spend.py`
+  - `app/api/v1/routes/hitl.py`
+  - `app/api/v1/routes/agents.py`
+  - `app/api/v1/routes/onboarding.py`
+  - `app/api/v1/routes/dashboard.py`
+  - `app/api/v1/routes/health.py`
+- Converted service layer helpers:
+  - `app/services/user_identity.py` (`get_or_create_user` now async)
+  - `app/services/activity_log.py` updated session typing for async
+  - `app/services/hitl/expiry_sweeper.py` converted to fully async DB access
+
+**Dependencies added:**
+- `pyproject.toml`
+  - `aiosqlite>=0.20.0`
+  - `greenlet>=3.1.1`
+
+**Verification executed:**
+- `uv run pytest tests/integration/test_spend_hitl_flow.py tests/integration/test_full_scenarios.py::TestSuspiciousHitlPath::test_suspicious_returns_202_with_correct_state`
+  - **4 passed**
+- `uv run pytest tests/unit/test_policy_checks.py tests/integration/test_full_scenarios.py`
+  - **30 passed**
+- `uv run pytest tests/integration/test_spend_hitl_flow.py tests/integration/test_full_scenarios.py tests/integration/test_dashboard_queue.py tests/integration/test_agents_settings_update.py`
+  - **27 passed**
+- `uv run pytest tests/unit`
+  - **29 passed**
+- Lints on touched files: clean
+
+**Current state:**
+- HITL 202 contract is schema-aligned and regression-tested
+- Destination is required at validation for both FIAT and STABLECOIN
+- Locus missing-destination exception is removed
+- Core backend request paths are async-session based (no sync DB calls in async auth path)
+
+---
+
 ### 2026-05-17 — UI status fix + destination policy change
 
 **What was done:**

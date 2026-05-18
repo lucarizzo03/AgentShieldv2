@@ -3,9 +3,10 @@ import logging
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from sqlmodel import Session, text
+from sqlalchemy import text
+from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.db.postgres import engine
+from app.db.postgres import async_engine
 from app.db.redis import redis_client
 
 logger = logging.getLogger(__name__)
@@ -22,12 +23,9 @@ async def liveness():
 async def readiness():
     failures: dict[str, str] = {}
 
-    def _check_postgres() -> None:
-        with Session(engine) as session:
-            session.exec(text("SELECT 1"))
-
     try:
-        await asyncio.to_thread(_check_postgres)
+        async with AsyncSession(async_engine) as session:
+            await session.execute(text("SELECT 1"))
     except Exception as exc:
         logger.warning("Readiness: postgres unhealthy", exc_info=exc)
         failures["postgres"] = str(exc)

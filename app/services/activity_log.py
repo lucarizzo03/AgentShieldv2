@@ -1,13 +1,13 @@
 from datetime import datetime, timezone
 from uuid import UUID
 
-from sqlmodel import Session
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent_activity import AgentActivity
 
 
 def append_agent_activity(
-    session: Session,
+    session: AsyncSession,
     *,
     agent_id: str,
     event_type: str,

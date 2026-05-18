@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.api.v1.schemas.dashboard import (
     ActivityFeedResponse,
@@ -22,31 +23,63 @@ from app.services.user_identity import get_or_create_user
 router = APIRouter(tags=["dashboard"])
 
 
-def _load_owned_agent(session: Session, *, auth_context: UserAuthContext, owner_user_id, agent_id: str) -> Agent:
+async def _load_owned_agent(session: AsyncSession, *, auth_context: UserAuthContext, owner_user_id, agent_id: str) -> Agent:
     query = select(Agent).where(Agent.agent_id == agent_id)
     if auth_context.agent_id:
         if auth_context.agent_id != agent_id:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     else:
         query = query.where(Agent.owner_user_id == owner_user_id)
-    agent = session.exec(query).first()
+    agent = (await session.exec(query)).first()
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     return agent
 
 
-def _today_rows(session: Session, *, agent_id: str) -> list[SpendAuditLog]:
-    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    return session.exec(
-        select(SpendAuditLog)
-        .where(SpendAuditLog.agent_id == agent_id)
-        .where(SpendAuditLog.created_at >= day_start)
-        .order_by(SpendAuditLog.created_at.desc())
-    ).all()
+def _normalize_optional_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
-def _latest_unique_transactions_today_utc(session: Session, *, agent_id: str) -> list[SpendAuditLog]:
-    today_rows = _today_rows(session, agent_id=agent_id)
+async def _scoped_rows(
+    session: AsyncSession,
+    *,
+    agent_id: str,
+    count_mode: str,
+    start_at: datetime | None,
+    end_at: datetime | None,
+) -> list[SpendAuditLog]:
+    query = select(SpendAuditLog).where(SpendAuditLog.agent_id == agent_id)
+    if count_mode == "today_utc":
+        day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        query = query.where(SpendAuditLog.created_at >= day_start)
+    else:
+        if start_at is not None:
+            query = query.where(SpendAuditLog.created_at >= start_at)
+        if end_at is not None:
+            query = query.where(SpendAuditLog.created_at <= end_at)
+
+    return (await session.exec(query.order_by(SpendAuditLog.created_at.desc()))).all()
+
+
+async def _latest_unique_transactions(
+    session: AsyncSession,
+    *,
+    agent_id: str,
+    count_mode: str,
+    start_at: datetime | None,
+    end_at: datetime | None,
+) -> list[SpendAuditLog]:
+    today_rows = await _scoped_rows(
+        session,
+        agent_id=agent_id,
+        count_mode=count_mode,
+        start_at=start_at,
+        end_at=end_at,
+    )
     latest: dict[str, SpendAuditLog] = {}
     for row in today_rows:
         if row.request_id not in latest or row.created_at > latest[row.request_id].created_at:
@@ -54,8 +87,21 @@ def _latest_unique_transactions_today_utc(session: Session, *, agent_id: str) ->
     return sorted(latest.values(), key=lambda row: row.created_at, reverse=True)
 
 
-def _activity_rows_today_utc(session: Session, *, agent_id: str) -> list[SpendAuditLog]:
-    today_rows = _today_rows(session, agent_id=agent_id)
+async def _activity_rows(
+    session: AsyncSession,
+    *,
+    agent_id: str,
+    count_mode: str,
+    start_at: datetime | None,
+    end_at: datetime | None,
+) -> list[SpendAuditLog]:
+    today_rows = await _scoped_rows(
+        session,
+        agent_id=agent_id,
+        count_mode=count_mode,
+        start_at=start_at,
+        end_at=end_at,
+    )
     latest_non_replay: dict[str, SpendAuditLog] = {}
     replay_rows: list[SpendAuditLog] = []
 
@@ -77,18 +123,18 @@ async def list_dashboard_notifications(
     notification_status: str = Query(default="OPEN", alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     auth_context: UserAuthContext = Depends(verify_user_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ):
-    user = None if auth_context.agent_id else get_or_create_user(session, auth_context)
-    _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
+    user = None if auth_context.agent_id else await get_or_create_user(session, auth_context)
+    await _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
 
-    rows = session.exec(
+    rows = (await session.exec(
         select(DashboardNotification)
         .where(DashboardNotification.agent_id == agent_id)
         .where(DashboardNotification.status == notification_status.upper())
         .order_by(DashboardNotification.created_at.desc())
         .limit(limit)
-    ).all()
+    )).all()
 
     now = datetime.now(timezone.utc)
     active = []
@@ -108,11 +154,11 @@ async def list_dashboard_notifications(
             n.status = "DISMISSED"
             n.updated_at = now
             session.add(n)
-            audit = session.exec(
+            audit = (await session.exec(
                 select(SpendAuditLog)
                 .where(SpendAuditLog.request_id == n.request_id)
                 .order_by(SpendAuditLog.created_at.desc())
-            ).first()
+            )).first()
             if audit and audit.status == "PENDING_HITL":
                 session.add(SpendAuditLog(
                     request_id=audit.request_id,
@@ -133,9 +179,9 @@ async def list_dashboard_notifications(
                     verdict=audit.verdict,
                     status="EXPIRED",
                 ))
-            pending = session.exec(
+            pending = (await session.exec(
                 select(PendingSpend).where(PendingSpend.request_id == n.request_id)
-            ).first()
+            )).first()
             if pending and pending.state == "WAITING_HUMAN":
                 pending.state = "EXPIRED"
                 session.add(pending)
@@ -143,7 +189,7 @@ async def list_dashboard_notifications(
             active.append(n)
 
     if len(active) < len(rows):
-        session.commit()
+        await session.commit()
 
     return {"agent_id": agent_id, "notifications": active}
 
@@ -157,11 +203,11 @@ async def update_dashboard_notification(
     notification_id: UUID,
     payload: DashboardNotificationAckRequest,
     auth_context: UserAuthContext = Depends(verify_user_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ):
-    user = None if auth_context.agent_id else get_or_create_user(session, auth_context)
-    _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
-    notification = session.exec(select(DashboardNotification).where(DashboardNotification.id == notification_id)).first()
+    user = None if auth_context.agent_id else await get_or_create_user(session, auth_context)
+    await _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
+    notification = (await session.exec(select(DashboardNotification).where(DashboardNotification.id == notification_id))).first()
     if not notification or notification.agent_id != agent_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Notification not found")
 
@@ -174,7 +220,7 @@ async def update_dashboard_notification(
     notification.acknowledged_at = now
     notification.updated_at = now
     session.add(notification)
-    session.commit()
+    await session.commit()
 
     return {
         "notification_id": notification.id,
@@ -188,18 +234,39 @@ async def update_dashboard_notification(
 async def list_agent_activity(
     agent_id: str,
     limit: int = Query(default=500, ge=1, le=2000),
+    scope: str = Query(default="all_time", pattern="^(all_time|today_utc)$"),
+    start_at: datetime | None = Query(default=None),
+    end_at: datetime | None = Query(default=None),
     auth_context: UserAuthContext = Depends(verify_user_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ):
-    user = None if auth_context.agent_id else get_or_create_user(session, auth_context)
-    _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
+    user = None if auth_context.agent_id else await get_or_create_user(session, auth_context)
+    await _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
 
-    latest_today = _latest_unique_transactions_today_utc(session, agent_id=agent_id)
-    rows = _activity_rows_today_utc(session, agent_id=agent_id)[:limit]
+    start = _normalize_optional_utc(start_at)
+    end = _normalize_optional_utc(end_at)
+    if start and end and end < start:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="end_at must be >= start_at")
+
+    count_mode = "range_utc" if (start or end) else scope
+    latest_today = await _latest_unique_transactions(
+        session,
+        agent_id=agent_id,
+        count_mode=count_mode,
+        start_at=start,
+        end_at=end,
+    )
+    rows = (await _activity_rows(
+        session,
+        agent_id=agent_id,
+        count_mode=count_mode,
+        start_at=start,
+        end_at=end,
+    ))[:limit]
     return {
         "agent_id": agent_id,
         "total_transactions_today": len(latest_today),
-        "count_mode": "today_utc",
+        "count_mode": count_mode,
         "activity": [
             {
                 "request_id": row.request_id,
@@ -231,13 +298,28 @@ async def list_agent_activity(
 @router.get("/dashboard/agents/{agent_id}/stats", response_model=DashboardStatsResponse)
 async def get_dashboard_stats(
     agent_id: str,
+    scope: str = Query(default="all_time", pattern="^(all_time|today_utc)$"),
+    start_at: datetime | None = Query(default=None),
+    end_at: datetime | None = Query(default=None),
     auth_context: UserAuthContext = Depends(verify_user_auth),
-    session: Session = Depends(get_session),
+    session: AsyncSession = Depends(get_session),
 ):
-    user = None if auth_context.agent_id else get_or_create_user(session, auth_context)
-    _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
+    user = None if auth_context.agent_id else await get_or_create_user(session, auth_context)
+    await _load_owned_agent(session, auth_context=auth_context, owner_user_id=user.id if user else None, agent_id=agent_id)
 
-    unique = _latest_unique_transactions_today_utc(session, agent_id=agent_id)
+    start = _normalize_optional_utc(start_at)
+    end = _normalize_optional_utc(end_at)
+    if start and end and end < start:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="end_at must be >= start_at")
+
+    count_mode = "range_utc" if (start or end) else scope
+    unique = await _latest_unique_transactions(
+        session,
+        agent_id=agent_id,
+        count_mode=count_mode,
+        start_at=start,
+        end_at=end,
+    )
 
     blocked = len([r for r in unique if r.status in {"BLOCKED", "DENIED_BY_HUMAN"}])
     approved = len([r for r in unique if r.status in {"APPROVED_EXECUTED", "APPROVED_BY_HUMAN_EXECUTED"}])
