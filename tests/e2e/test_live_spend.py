@@ -39,17 +39,18 @@ def _post(path: str, payload: dict) -> httpx.Response:
 # ---------------------------------------------------------------------------
 
 def test_live_safe_verdict() -> None:
+    # Food goal + food vendor + $1 — under $2 auto-approve ceiling, food scope, semantically valid
     r = _post("/v1/spend-request", {
         "agent_id": AGENT_ID,
-        "declared_goal": "Book flight JFK to LAX",
+        "declared_goal": "Buy a candy bar for a snack",
         "amount_cents": 100,
         "currency": "USD",
-        "vendor_url_or_name": "delta.com",
-        "item_description": "Economy seat JFK-LAX",
+        "vendor_url_or_name": "walmart.com",
+        "item_description": "Candy bar",
         "asset_type": "FIAT",
         "destination_address": "fiat-destination-acct-0001",
     })
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
     body = r.json()
     assert body["verdict"] == "SAFE"
     assert body["status"] == "APPROVED_EXECUTED"
@@ -150,13 +151,14 @@ def test_live_idempotency_replay() -> None:
 # ---------------------------------------------------------------------------
 
 def test_live_status_poll_after_safe() -> None:
+    # Same food/amount profile as SAFE test — confirmed clears all 4 checks
     r = _post("/v1/spend-request", {
         "agent_id": AGENT_ID,
-        "declared_goal": "Book flight JFK to LAX",
+        "declared_goal": "Buy a candy bar for a snack",
         "amount_cents": 100,
         "currency": "USD",
-        "vendor_url_or_name": "delta.com",
-        "item_description": "Economy seat JFK-LAX",
+        "vendor_url_or_name": "walmart.com",
+        "item_description": "Candy bar",
         "asset_type": "FIAT",
         "destination_address": "fiat-destination-acct-0001",
     })
