@@ -257,6 +257,16 @@ export default function LandingView() {
           .check-grid { grid-template-columns: 1fr !important; }
         }
 
+        /* ── Live dot pulse ──────────────────────────────────────*/
+        .dot-live {
+          width: 6px; height: 6px; border-radius: 50%; background: #00C853;
+          animation: dotPulse 1.1s ease-in-out infinite; flex-shrink: 0;
+        }
+        @keyframes dotPulse {
+          0%,100% { opacity: 0.35; transform: scale(0.8); }
+          50%      { opacity: 1;    transform: scale(1);   }
+        }
+
         /* ── Scan line on terminal ────────────────────────────────*/
         @keyframes scan {
           0%   { top: 0; opacity: 0; }
@@ -292,7 +302,7 @@ export default function LandingView() {
             {/* Left: copy */}
             <div>
               <div style={{ display: "inline-flex", alignItems: "center", gap: 8, border: "1px solid #1e1e1e", background: "#111", padding: "4px 10px", marginBottom: 28 }}>
-                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#ededed" }} />
+                <span className="dot-live" />
                 <span className="mono" style={{ fontSize: 10, color: "#555", letterSpacing: "0.1em" }}>LIVE</span>
               </div>
 
@@ -460,8 +470,9 @@ export default function LandingView() {
 
         {/* ── CTA ───────────────────────────────────────────────── */}
         <section style={{ maxWidth: 1040, margin: "0 auto", padding: "88px 32px 96px", textAlign: "center" }}>
-          <div className="mono" style={{ fontSize: 10, letterSpacing: "0.12em", color: "#444", marginBottom: 18 }}>
-            ● LIVE · SAFE AND MALICIOUS VERDICTS FULLY OPERATIONAL
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 18 }}>
+            <span className="dot-live" />
+            <span className="mono" style={{ fontSize: 10, letterSpacing: "0.12em", color: "#444" }}>LIVE · SAFE AND MALICIOUS VERDICTS FULLY OPERATIONAL</span>
           </div>
           <h2 style={{ fontSize: "clamp(1.8rem, 4vw, 3rem)", fontWeight: 600, letterSpacing: "-0.025em", marginBottom: 16 }}>
             Start protecting your agents.
