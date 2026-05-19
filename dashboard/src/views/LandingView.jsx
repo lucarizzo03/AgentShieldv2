@@ -14,15 +14,21 @@ const T = {
   op:    "#808080", // operators / punctuation
 };
 
-function Seg({ t, children }) {
-  return <span style={{ color: T[t] || T.def, whiteSpace: "pre" }}>{children}</span>;
-}
-
-function CodeLine({ segs }) {
-  if (!segs) return <div style={{ height: "1.4em" }} />;
+// One row in a code block. Line number + a single pre-wrapped span so tokens
+// stay inline and leading spaces are preserved without flex oddities.
+function CodeRow({ segs, lineNum, showLineNum = true }) {
   return (
-    <div style={{ display: "flex" }}>
-      {segs.map(([text, tok], i) => <Seg key={i} t={tok}>{text}</Seg>)}
+    <div style={{ display: "flex", lineHeight: 1.65, minHeight: "1.65em" }}>
+      {showLineNum && (
+        <span style={{ minWidth: 30, color: "#2e2e2e", userSelect: "none", textAlign: "right", marginRight: 16, flexShrink: 0 }}>
+          {segs ? lineNum : ""}
+        </span>
+      )}
+      <span style={{ whiteSpace: "pre" }}>
+        {segs
+          ? segs.map(([text, tok], i) => <span key={i} style={{ color: T[tok] || T.def }}>{text}</span>)
+          : null}
+      </span>
     </div>
   );
 }
@@ -47,6 +53,24 @@ const PYTHON = [
   [["))", "op"]],
   null,
   [["print", "fn"], ["(", "op"], ["result", "def"], [".", "op"], ["verdict", "key"], [")", "op"], ["   ", "def"], ["# SAFE | SUSPICIOUS | MALICIOUS", "cmt"]],
+];
+
+// ─── Hero terminal (shorter, self-contained) ─────────────────────────────────
+const HERO_LINES = [
+  [["from ", "kw"], ["agentshield ", "def"], ["import ", "kw"], ["AgentShield", "cls"], [", ", "op"], ["SpendRequest", "cls"]],
+  null,
+  [["shield", "def"], [" = ", "op"], ["AgentShield", "cls"], ["(", "op"]],
+  [["    agent_id", "key"], ["=", "op"], ['"agt_..."', "str"], [",", "op"]],
+  [["    hmac_secret", "key"], ["=", "op"], ['"sk_live_..."', "str"], [",", "op"]],
+  [[")", "op"]],
+  null,
+  [["result", "def"], [" = ", "op"], ["shield", "def"], [".", "op"], ["spend_request", "fn"], ["(", "op"], ["SpendRequest", "cls"], ["(", "op"]],
+  [["    declared_goal", "key"], ["=", "op"], ['"Book flight JFK to LAX"', "str"], [",", "op"]],
+  [["    amount_cents", "key"], ["=", "op"], ["25000", "num"], [",", "op"]],
+  [["    vendor_url_or_name", "key"], ["=", "op"], ['"delta.com"', "str"], [",", "op"]],
+  [["))", "op"]],
+  null,
+  [["print", "fn"], ["(result.", "op"], ["verdict", "key"], [")   ", "op"], ["# SAFE | SUSPICIOUS | MALICIOUS", "cmt"]],
 ];
 
 // ─── cURL code ───────────────────────────────────────────────────────────────
@@ -299,17 +323,10 @@ export default function LandingView() {
               <CodeWindow title="spend_request.py" style={{ position: "relative", overflow: "hidden" }}>
                 {/* Scan line */}
                 <div style={{ position: "absolute", left: 0, right: 0, height: 1, background: "linear-gradient(90deg, transparent, rgba(79,193,255,0.15), transparent)", animation: "scan 6s linear infinite", pointerEvents: "none", zIndex: 2 }} />
-                <div className="code-body">
-                  {PYTHON.slice(0, 10).map((segs, i) => (
-                    <div key={i} className="code-line mono" style={{ fontSize: 12 }}>
-                      <span className="ln">{segs ? i + 1 : ""}</span>
-                      {segs ? segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def, whiteSpace: "pre" }}>{text}</span>) : null}
-                    </div>
+                <div className="code-body mono" style={{ fontSize: 12 }}>
+                  {HERO_LINES.map((segs, i) => (
+                    <CodeRow key={i} segs={segs} lineNum={i + 1} showLineNum={false} />
                   ))}
-                  <div className="code-line mono" style={{ fontSize: 12, opacity: 0.4 }}>
-                    <span className="ln">…</span>
-                    <span style={{ color: T.cmt }}>{"# verdict: SAFE | SUSPICIOUS | MALICIOUS"}</span>
-                  </div>
                 </div>
 
                 {/* Response badge */}
@@ -414,12 +431,9 @@ export default function LandingView() {
                 <Tab active={codeTab === "python"} onClick={() => setCodeTab("python")}>Python SDK</Tab>
                 <Tab active={codeTab === "curl"} onClick={() => setCodeTab("curl")}>cURL</Tab>
               </div>
-              <div className="code-body">
+              <div className="code-body mono" style={{ fontSize: 12 }}>
                 {lines.map((segs, i) => (
-                  <div key={i} className="code-line mono" style={{ fontSize: 12 }}>
-                    <span className="ln">{segs ? i + 1 : ""}</span>
-                    {segs ? segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def, whiteSpace: "pre" }}>{text}</span>) : null}
-                  </div>
+                  <CodeRow key={i} segs={segs} lineNum={i + 1} />
                 ))}
               </div>
             </CodeWindow>
@@ -433,12 +447,9 @@ export default function LandingView() {
                 <span className="mono" style={{ fontSize: 10, color: "#333" }}>RESPONSE</span>
                 <span className="mono" style={{ fontSize: 10, padding: "2px 8px", background: "#161616", border: "1px solid #2a2a2a", color: "#888" }}>200 SAFE</span>
               </div>
-              <div className="code-body">
+              <div className="code-body mono" style={{ fontSize: 12 }}>
                 {RESPONSE.map((segs, i) => (
-                  <div key={i} className="code-line mono" style={{ fontSize: 12 }}>
-                    <span className="ln">{i + 1}</span>
-                    {segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def, whiteSpace: "pre" }}>{text}</span>)}
-                  </div>
+                  <CodeRow key={i} segs={segs} lineNum={i + 1} />
                 ))}
               </div>
             </CodeWindow>
@@ -479,7 +490,7 @@ export default function LandingView() {
             Start protecting your agents.
           </h2>
           <p style={{ color: "#555", fontSize: 15, marginBottom: 36, maxWidth: 400, margin: "0 auto 36px" }}>
-            Create an account, spin up an agent, and make your first protected request in under five minutes.
+            Create an account, register an agent, and make your first protected request in under five minutes.
           </p>
           <Link to="/auth" className="btn-p">Start for free →</Link>
         </section>
