@@ -362,13 +362,11 @@ result = client.spend_request(SpendRequest(
     idempotency_key="run-20241012-001",  # optional dedup
 ))
 
-if result.verdict == "SAFE":
+if result.approved:
     execute_payment()  # your code — AgentShield cleared it, you execute it
-elif result.verdict == "SUSPICIOUS":
-    # poll until human resolves
-    status = client.get_spend_status(result.request_id)
-elif result.verdict == "MALICIOUS":
-    raise RuntimeError("Payment blocked by policy")`} {...codeProps} />
+elif result.pending_hitl:
+    # SUSPICIOUS — see polling section below
+    pass`} {...codeProps} />
 
           <SubHeader>SpendRequest fields</SubHeader>
           <FieldTable rows={[
@@ -387,21 +385,29 @@ elif result.verdict == "MALICIOUS":
           ]} />
 
           <SubHeader>Polling for HITL resolution</SubHeader>
-          <P>When a request returns <InlineCode>SUSPICIOUS</InlineCode>, poll until the human reviewer resolves it:</P>
+          <P>When <InlineCode>result.pending_hitl</InlineCode> is true, poll until the human reviewer resolves it:</P>
           <CodeBlock lang="python" code={`import time
+from agentshield import AgentShieldBlockedError
 
-result = client.spend_request(SpendRequest(...))
+result = client.spend_request(req)
 
-if result.verdict == "SUSPICIOUS":
-    for _ in range(60):       # timeout after ~5 minutes
-        time.sleep(5)
+if result.approved:
+    execute_payment()
+elif result.pending_hitl:  # 202 / SUSPICIOUS path
+    for _ in range(60):  # up to 10 minutes at 10s intervals
         status = client.get_spend_status(result.request_id)
-        if status.status != "WAITING_HUMAN":
+
+        if status.resolved:
             if status.status == "APPROVED_BY_HUMAN_EXECUTED":
-                print("Human approved — agent cleared to proceed")
+                execute_payment()  # proceed only after human approval
             else:
-                print("Denied or expired")
-            break`} {...codeProps} />
+                print("Denied or expired; do not execute payment.")
+            break
+
+        time.sleep(10)
+    else:
+        # loop exhausted with no break
+        raise TimeoutError("HITL review not resolved in time.")`} {...codeProps} />
 
           {/* Async */}
           <SectionHeader id="async">Async Support</SectionHeader>

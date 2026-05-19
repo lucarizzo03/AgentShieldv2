@@ -51,6 +51,25 @@ function Label({ children }) {
   );
 }
 
+function MoneyInput({ value, placeholder, onChange, style: extraStyle }) {
+  return (
+    <div style={{ display: "flex", alignItems: "stretch", border: "1px solid var(--border)", borderRadius: 6, overflow: "hidden" }}>
+      <span style={{ padding: "0 10px", background: "var(--bg-overlay)", color: "var(--text-2)", fontFamily: "var(--font-mono)", fontSize: 13, display: "flex", alignItems: "center", borderRight: "1px solid var(--border)", flexShrink: 0 }}>
+        $
+      </span>
+      <input
+        type="number"
+        min={0}
+        step={1}
+        value={value}
+        placeholder={placeholder}
+        onChange={onChange}
+        style={{ ...inputStyle, border: "none", borderRadius: 0, flex: 1, ...extraStyle }}
+      />
+    </div>
+  );
+}
+
 function Field({ label, hint, children, compact = false }) {
   return (
     <div style={{ marginBottom: compact ? 10 : 15 }}>
@@ -349,15 +368,15 @@ export default function AgentsPanel({
 
               <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
                 <Field label="Daily Spend Limit (USD)">
-                  <input type="number" min={0} step={1} value={form.daily} placeholder="500" onChange={(event) => onFormChange((prev) => ({ ...prev, daily: event.target.value }))} style={inputStyle} />
+                  <MoneyInput value={form.daily} placeholder="500" onChange={(event) => onFormChange((prev) => ({ ...prev, daily: event.target.value }))} />
                 </Field>
-                <Field label="Per-Txn Limit (USD)">
-                  <input type="number" min={0} step={1} value={form.perTx} placeholder="200" onChange={(event) => onFormChange((prev) => ({ ...prev, perTx: event.target.value }))} style={inputStyle} />
+                <Field label="Per-Transaction Limit (USD)" hint="Single spend above this amount routes to human review.">
+                  <MoneyInput value={form.perTx} placeholder="200" onChange={(event) => onFormChange((prev) => ({ ...prev, perTx: event.target.value }))} />
                 </Field>
               </div>
 
               <Field label="Auto-Approve Under (USD)" hint="Above this amount will route to HITL.">
-                <input type="number" min={0} step={1} value={form.auto} placeholder="25" onChange={(event) => onFormChange((prev) => ({ ...prev, auto: event.target.value }))} style={inputStyle} />
+                <MoneyInput value={form.auto} placeholder="25" onChange={(event) => onFormChange((prev) => ({ ...prev, auto: event.target.value }))} />
               </Field>
 
               <Field label="Goal Drift Scopes" hint="Add mission scopes now so Check 4 is active immediately.">
@@ -496,15 +515,15 @@ export default function AgentsPanel({
 
               <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
                 <Field label="Daily Spend Limit (USD)" compact>
-                  <input type="number" min={0} step={1} value={settingsForm.daily} onChange={(event) => updateSettingsField("daily", event.target.value)} style={inputStyle} />
+                  <MoneyInput value={settingsForm.daily} onChange={(event) => updateSettingsField("daily", event.target.value)} />
                 </Field>
-                <Field label="Per-Txn Limit (USD)" compact>
-                  <input type="number" min={0} step={1} value={settingsForm.perTx} onChange={(event) => updateSettingsField("perTx", event.target.value)} style={inputStyle} />
+                <Field label="Per-Transaction Limit (USD)" hint="Single spend above this amount routes to human review." compact>
+                  <MoneyInput value={settingsForm.perTx} onChange={(event) => updateSettingsField("perTx", event.target.value)} />
                 </Field>
               </div>
 
               <Field label="Auto-Approve Under (USD)" compact>
-                <input type="number" min={0} step={1} value={settingsForm.auto} onChange={(event) => updateSettingsField("auto", event.target.value)} style={inputStyle} />
+                <MoneyInput value={settingsForm.auto} onChange={(event) => updateSettingsField("auto", event.target.value)} />
               </Field>
 
               <Field label="Allowed Networks" compact>
