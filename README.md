@@ -1,6 +1,6 @@
 # AgentShield
 
-**[→ Live Dashboard](https://agentshieldv2-dashboard-production.up.railway.app)** — sign in, create an agent, and start making requests in minutes.
+**[→ Live Dashboard](https://agentshieldv2-dashboard-production.up.railway.app?utm_source=github&utm_medium=readme&utm_campaign=agentshield)** — sign in, create an agent, and start making requests in minutes.
 
 Questions or issues → **rizzoluca2003@gmail.com**
 
