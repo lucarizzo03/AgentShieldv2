@@ -1,104 +1,107 @@
 import { Link } from "react-router-dom";
 import { useState } from "react";
 
-const CODE_PYTHON = `pip install agentshield-pythonv2`;
+// ─── Syntax token colors ────────────────────────────────────────────────────
+const T = {
+  kw:    "#4FC1FF", // keywords
+  cls:   "#56D364", // class names / types
+  str:   "#CE9178", // strings
+  num:   "#B5CEA8", // numbers
+  cmt:   "#4D5566", // comments
+  fn:    "#DCDCAA", // function calls
+  key:   "#9CDCFE", // kwarg / json keys
+  def:   "#C8C8C8", // default
+  op:    "#808080", // operators / punctuation
+};
 
-const CODE_USAGE = `from agentshield import AgentShield, SpendRequest
+function Seg({ t, children }) {
+  return <span style={{ color: T[t] || T.def }}>{children}</span>;
+}
 
-client = AgentShield(
-    agent_id="agt_...",
-    hmac_secret="sk_live_...",
-    base_url="https://api.agentshield.dev",
-)
+function CodeLine({ segs }) {
+  if (!segs) return <div style={{ height: "1.4em" }} />;
+  return (
+    <div style={{ display: "flex" }}>
+      {segs.map(([text, tok], i) => <Seg key={i} t={tok}>{text}</Seg>)}
+    </div>
+  );
+}
 
-result = client.spend_request(SpendRequest(
-    agent_id="agt_...",
-    declared_goal="Book flight JFK to LAX",
-    amount_cents=25000,
-    currency="USD",
-    vendor_url_or_name="delta.com",
-    item_description="Economy seat JFK-LAX, Oct 12",
-    asset_type="FIAT",
-    destination_address="0x742d35...",
-))
+// ─── Python usage code ───────────────────────────────────────────────────────
+const PYTHON = [
+  [["from ", "kw"], ["agentshield ", "def"], ["import ", "kw"], ["AgentShield", "cls"], [", ", "op"], ["SpendRequest", "cls"]],
+  null,
+  [["client", "def"], [" = ", "op"], ["AgentShield", "cls"], ["(", "op"]],
+  [["    agent_id", "key"], ["=", "op"], ['"agt_..."', "str"], [",", "op"]],
+  [["    hmac_secret", "key"], ["=", "op"], ['"sk_live_..."', "str"], [",", "op"]],
+  [["    base_url", "key"], ["=", "op"], ['"https://api.agentshield.dev"', "str"], [",", "op"]],
+  [[")", "op"]],
+  null,
+  [["result", "def"], [" = ", "op"], ["client", "def"], [".", "op"], ["spend_request", "fn"], ["(", "op"], ["SpendRequest", "cls"], ["(", "op"]],
+  [["    agent_id", "key"], ["=", "op"], ['"agt_..."', "str"], [",", "op"]],
+  [["    declared_goal", "key"], ["=", "op"], ['"Book flight JFK to LAX"', "str"], [",", "op"]],
+  [["    amount_cents", "key"], ["=", "op"], ["25000", "num"], [",", "op"]],
+  [["    vendor_url_or_name", "key"], ["=", "op"], ['"delta.com"', "str"], [",", "op"]],
+  [["    asset_type", "key"], ["=", "op"], ['"FIAT"', "str"], [",", "op"]],
+  [["    destination_address", "key"], ["=", "op"], ['"0x742d35..."', "str"], [",", "op"]],
+  [["))", "op"]],
+  null,
+  [["print", "fn"], ["(result", "def"], [".", "op"], ["verdict", "key"], [")   ", "op"], ["# SAFE | SUSPICIOUS | MALICIOUS", "cmt"]],
+];
 
-print(result.verdict)  # SAFE | SUSPICIOUS | MALICIOUS`;
+// ─── cURL code ───────────────────────────────────────────────────────────────
+const CURL = [
+  [["curl", "fn"], [" -X ", "op"], ["POST ", "str"], ["\\", "op"]],
+  [["  https://api.agentshield.dev/v1/spend-request", "def"], [" \\", "op"]],
+  [["  -H ", "op"], ['"Content-Type: application/json"', "str"], [" \\", "op"]],
+  [["  -H ", "op"], ['"x-agent-id: agt_..."', "str"], [" \\", "op"]],
+  [["  -H ", "op"], ['"x-timestamp: 2026-05-18T12:00:00Z"', "str"], [" \\", "op"]],
+  [["  -H ", "op"], ['"x-signature: sha256=<hmac>"', "str"], [" \\", "op"]],
+  [["  -d ", "op"], ["'\\{", "str"]],
+  [["    ", "def"], ['"agent_id"', "key"], [": ", "op"], ['"agt_..."', "str"], [",", "op"]],
+  [["    ", "def"], ['"declared_goal"', "key"], [": ", "op"], ['"Book flight JFK to LAX"', "str"], [",", "op"]],
+  [["    ", "def"], ['"amount_cents"', "key"], [": ", "op"], ["25000", "num"], [",", "op"]],
+  [["    ", "def"], ['"vendor_url_or_name"', "key"], [": ", "op"], ['"delta.com"', "str"], [",", "op"]],
+  [["    ", "def"], ['"asset_type"', "key"], [": ", "op"], ['"FIAT"', "str"]],
+  [["  \\}'", "str"]],
+];
 
-const CODE_CURL = `curl -X POST https://api.agentshield.dev/v1/spend-request \\
-  -H "Content-Type: application/json" \\
-  -H "x-agent-id: agt_..." \\
-  -H "x-timestamp: 2026-05-18T12:00:00Z" \\
-  -H "x-signature: sha256=<hmac>" \\
-  -d '{
-    "agent_id": "agt_...",
-    "declared_goal": "Book flight JFK to LAX",
-    "amount_cents": 25000,
-    "vendor_url_or_name": "delta.com",
-    "asset_type": "FIAT",
-    "destination_address": "0x742d35..."
-  }'`;
+// ─── Response preview ────────────────────────────────────────────────────────
+const RESPONSE = [
+  [["{", "op"]],
+  [["  ", "def"], ['"verdict"', "key"], [": ", "op"], ['"SAFE"', "str"], [",", "op"]],
+  [["  ", "def"], ['"status"', "key"], [": ", "op"], ['"APPROVED_EXECUTED"', "str"], [",", "op"]],
+  [["  ", "def"], ['"request_id"', "key"], [": ", "op"], ['"req_01JW..."', "str"], [",", "op"]],
+  [["  ", "def"], ['"approved_amount_cents"', "key"], [": ", "op"], ["25000", "num"], [",", "op"]],
+  [["  ", "def"], ['"agent_feedback"', "key"], [": {", "op"]],
+  [["    ", "def"], ['"check_a_quantitative"', "key"], [": { ", "op"], ['"passed"', "key"], [": ", "op"], ["true", "kw"], [" },", "op"]],
+  [["    ", "def"], ['"check_b_policy"', "key"], [":       { ", "op"], ['"passed"', "key"], [": ", "op"], ["true", "kw"], [" },", "op"]],
+  [["    ", "def"], ['"check_c_semantic"', "key"], [":     { ", "op"], ['"alignment_label"', "key"], [": ", "op"], ['"ALIGNED"', "str"], [", ", "op"], ['"risk_score"', "key"], [": ", "op"], ["12", "num"], [" },", "op"]],
+  [["    ", "def"], ['"check_d_goal_drift"', "key"], [":  { ", "op"], ['"within_scope"', "key"], [": ", "op"], ["true", "kw"], [", ", "op"], ['"matched_scope"', "key"], [": ", "op"], ['"travel booking"', "str"], [" }", "op"]],
+  [["  }", "op"]],
+  [["}", "op"]],
+];
 
 const verdicts = [
-  {
-    code: "200",
-    label: "SAFE",
-    color: "#00C853",
-    bg: "rgba(0,200,83,0.08)",
-    border: "rgba(0,200,83,0.2)",
-    desc: "Agent is cleared to proceed with the payment.",
-  },
-  {
-    code: "202",
-    label: "SUSPICIOUS",
-    color: "#FF9500",
-    bg: "rgba(255,149,0,0.08)",
-    border: "rgba(255,149,0,0.2)",
-    desc: "Held for human review. Agent must wait for a decision.",
-  },
-  {
-    code: "403",
-    label: "MALICIOUS",
-    color: "#FF3B30",
-    bg: "rgba(255,59,48,0.08)",
-    border: "rgba(255,59,48,0.2)",
-    desc: "Blocked. The agent should not retry this request.",
-  },
+  { code: "200", label: "SAFE",       color: "#00C853", bg: "rgba(0,200,83,0.07)",   border: "rgba(0,200,83,0.18)",   desc: "Cleared. Agent may proceed." },
+  { code: "202", label: "SUSPICIOUS", color: "#FF9500", bg: "rgba(255,149,0,0.07)",  border: "rgba(255,149,0,0.18)",  desc: "Held. Human review required." },
+  { code: "403", label: "MALICIOUS",  color: "#FF3B30", bg: "rgba(255,59,48,0.07)",  border: "rgba(255,59,48,0.18)",  desc: "Blocked. Do not retry." },
 ];
 
 const checks = [
-  {
-    id: "A",
-    label: "Quantitative",
-    where: "Redis",
-    desc: "Daily budget, loop detection, destination burst — enforced atomically with Lua.",
-  },
-  {
-    id: "B",
-    label: "Policy",
-    where: "Postgres",
-    desc: "Vendor blocklist, amount thresholds, stablecoin and network allowlists.",
-  },
-  {
-    id: "C",
-    label: "Semantic",
-    where: "Claude Haiku",
-    desc: "Does the stated goal actually match what's being purchased?",
-  },
-  {
-    id: "D",
-    label: "Goal Drift",
-    where: "Claude Haiku",
-    desc: "Is this purchase within what the agent is supposed to do at all?",
-  },
+  { id: "A", label: "Quantitative", where: "Redis",        desc: "Budget limits, loop detection, and destination burst — enforced atomically via Lua script." },
+  { id: "B", label: "Policy",       where: "Postgres",     desc: "Vendor blocklist, per-transaction thresholds, network and stablecoin allowlists." },
+  { id: "C", label: "Semantic",     where: "Claude Haiku", desc: "Does the stated goal actually match what's being purchased?" },
+  { id: "D", label: "Goal Drift",   where: "Claude Haiku", desc: "Is this purchase within what the agent is supposed to do at all?" },
 ];
 
 const features = [
-  { label: "Idempotency", desc: "Cache verdicts 24 h to prevent double-charges on retries." },
-  { label: "HMAC signing", desc: "Every request is payload-signed — identity + integrity, not just auth." },
-  { label: "HITL flow", desc: "Suspicious requests pause the agent and queue for human review." },
-  { label: "Audit log", desc: "Append-only ledger of every decision, forever." },
-  { label: "Callback URL", desc: "Push the resolution to your agent the moment a human decides." },
-  { label: "SSRF protection", desc: "Callback URLs are validated against public IPs only." },
+  { label: "Idempotency",      desc: "24h verdict cache prevents double-charges on network retries." },
+  { label: "HMAC signing",     desc: "Every request is payload-signed — identity and integrity, not just a key." },
+  { label: "HITL queue",       desc: "Suspicious requests pause the agent and surface in a dashboard approval queue." },
+  { label: "Append-only log",  desc: "Every decision is recorded. No updates, no deletes, ever." },
+  { label: "Callback URL",     desc: "Push the human decision to your agent the moment it's resolved." },
+  { label: "SSRF protection",  desc: "Callback URLs are validated against public IPs only — RFC-1918 blocked." },
 ];
 
 function Tab({ active, onClick, children }) {
@@ -106,16 +109,13 @@ function Tab({ active, onClick, children }) {
     <button
       onClick={onClick}
       style={{
-        background: "transparent",
-        border: "none",
+        background: "transparent", border: "none",
         borderBottom: active ? "1px solid #ededed" : "1px solid transparent",
-        color: active ? "#ededed" : "#666",
+        color: active ? "#ededed" : "#555",
         fontFamily: "Geist Mono, IBM Plex Mono, monospace",
-        fontSize: 12,
-        padding: "6px 0",
-        marginRight: 20,
-        cursor: "pointer",
-        letterSpacing: "0.05em",
+        fontSize: 11, letterSpacing: "0.06em",
+        padding: "6px 0", marginRight: 18, cursor: "pointer",
+        transition: "color 120ms",
       }}
     >
       {children}
@@ -123,270 +123,378 @@ function Tab({ active, onClick, children }) {
   );
 }
 
+function CodeWindow({ title, children, style }) {
+  return (
+    <div style={{ border: "1px solid #1e1e1e", background: "#0e0e0e", ...style }}>
+      <div style={{ borderBottom: "1px solid #1e1e1e", padding: "9px 14px", display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#333" }} />
+        <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#333" }} />
+        <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#333" }} />
+        {title ? <span style={{ marginLeft: 8, fontFamily: "Geist Mono, monospace", fontSize: 11, color: "#444", letterSpacing: "0.05em" }}>{title}</span> : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 export default function LandingView() {
   const [codeTab, setCodeTab] = useState("python");
-
-  const activeCode = codeTab === "python" ? CODE_USAGE : CODE_CURL;
+  const lines = codeTab === "python" ? PYTHON : CURL;
 
   return (
-    <div style={{ background: "#0c0c0c", color: "#ededed", fontFamily: "Geist, IBM Plex Sans, sans-serif", minHeight: "100vh" }}>
+    <div style={{ background: "#0c0c0c", color: "#ededed", fontFamily: "Geist, IBM Plex Sans, sans-serif", minHeight: "100vh", position: "relative", overflowX: "hidden" }}>
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        ::selection { background: rgba(237,237,237,0.15); }
+        ::selection { background: rgba(237,237,237,0.12); }
+
+        /* ── Background grid ──────────────────────────────────── */
+        .bg-grid {
+          position: fixed; inset: 0; pointer-events: none; z-index: 0;
+          background-image: radial-gradient(circle, #1c1c1c 1px, transparent 1px);
+          background-size: 28px 28px;
+          mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 40%, transparent 100%);
+          -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, black 40%, transparent 100%);
+        }
+
+        /* ── Animated orbs ──────────────────────────────────────*/
+        .orb {
+          position: fixed; border-radius: 50%; pointer-events: none; z-index: 0;
+          filter: blur(80px);
+        }
+        .orb-1 {
+          width: 600px; height: 600px;
+          top: -180px; right: -120px;
+          background: radial-gradient(circle, rgba(10,132,255,0.09) 0%, transparent 70%);
+          animation: orbDrift1 22s ease-in-out infinite;
+        }
+        .orb-2 {
+          width: 800px; height: 800px;
+          bottom: -200px; left: -200px;
+          background: radial-gradient(circle, rgba(0,200,83,0.06) 0%, transparent 70%);
+          animation: orbDrift2 28s ease-in-out infinite;
+        }
+        @keyframes orbDrift1 {
+          0%,100% { transform: translate(0,0) scale(1); }
+          33%      { transform: translate(-40px, 30px) scale(1.06); }
+          66%      { transform: translate(25px, -35px) scale(0.94); }
+        }
+        @keyframes orbDrift2 {
+          0%,100% { transform: translate(0,0) scale(1); }
+          33%      { transform: translate(50px, -25px) scale(1.08); }
+          66%      { transform: translate(-30px, 45px) scale(0.93); }
+        }
+
+        /* ── Typography & links ─────────────────────────────────*/
         .mono { font-family: "Geist Mono", "IBM Plex Mono", monospace; }
-        .landing-link { color: #888; text-decoration: none; font-size: 13px; transition: color 120ms; }
-        .landing-link:hover { color: #ededed; }
-        .btn-primary {
-          display: inline-block;
-          background: #ededed;
-          color: #0c0c0c;
-          border: 1px solid #ededed;
-          padding: 10px 20px;
-          font-size: 13px;
-          font-family: "Geist Mono", monospace;
-          letter-spacing: 0.02em;
-          cursor: pointer;
-          text-decoration: none;
-          transition: opacity 120ms;
+        .lbl  { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: #444; }
+        .lnk  { color: #666; text-decoration: none; font-size: 13px; transition: color 100ms; }
+        .lnk:hover { color: #ccc; }
+
+        /* ── Buttons ────────────────────────────────────────────*/
+        .btn-p {
+          display: inline-block; background: #ededed; color: #0c0c0c;
+          border: 1px solid #ededed; padding: 10px 22px; font-size: 13px;
+          font-family: "Geist Mono", monospace; letter-spacing: 0.02em;
+          cursor: pointer; text-decoration: none; transition: opacity 100ms;
         }
-        .btn-primary:hover { opacity: 0.88; }
-        .btn-ghost {
-          display: inline-block;
-          background: transparent;
-          color: #ededed;
-          border: 1px solid #333;
-          padding: 10px 20px;
-          font-size: 13px;
-          font-family: "Geist Mono", monospace;
-          letter-spacing: 0.02em;
-          cursor: pointer;
-          text-decoration: none;
-          transition: border-color 120ms;
+        .btn-p:hover { opacity: 0.85; }
+        .btn-g {
+          display: inline-block; background: transparent; color: #ccc;
+          border: 1px solid #2a2a2a; padding: 10px 22px; font-size: 13px;
+          font-family: "Geist Mono", monospace; letter-spacing: 0.02em;
+          cursor: pointer; text-decoration: none; transition: border-color 100ms, color 100ms;
         }
-        .btn-ghost:hover { border-color: #555; }
+        .btn-g:hover { border-color: #444; color: #ededed; }
+
+        /* ── Check cards ─────────────────────────────────────────*/
         .check-card {
-          border: 1px solid #1e1e1e;
-          background: #111;
-          padding: 20px;
-          transition: border-color 120ms;
+          border: 1px solid #1a1a1a; background: #0e0e0e; padding: 20px 18px;
+          transition: border-color 150ms;
         }
         .check-card:hover { border-color: #2a2a2a; }
-        .feature-item {
-          padding: 16px 0;
-          border-bottom: 1px solid #1a1a1a;
-          display: grid;
-          grid-template-columns: 160px 1fr;
-          gap: 12px;
-        }
-        .feature-item:last-child { border-bottom: none; }
-        @media (max-width: 640px) {
-          .feature-item { grid-template-columns: 1fr; gap: 4px; }
-          .verdict-grid { grid-template-columns: 1fr !important; }
+
+        /* ── Feature rows ────────────────────────────────────────*/
+        .feat { padding: 14px 0; border-bottom: 1px solid #161616; display: grid; grid-template-columns: 148px 1fr; gap: 16px; }
+        .feat:last-child { border-bottom: none; }
+
+        /* ── Code line numbers ───────────────────────────────────*/
+        .code-body { padding: 16px 20px; overflow-x: auto; }
+        .code-line { display: flex; line-height: 1.65; }
+        .ln { min-width: 32px; color: #333; user-select: none; font-size: 12px; text-align: right; margin-right: 16px; flex-shrink: 0; }
+
+        /* ── Responsive ──────────────────────────────────────────*/
+        @media (max-width: 700px) {
+          .hero-cols { grid-template-columns: 1fr !important; }
           .check-grid { grid-template-columns: 1fr 1fr !important; }
-          .hero-ctas { flex-direction: column !important; align-items: flex-start !important; }
+          .verdict-grid { grid-template-columns: 1fr !important; }
+          .feat { grid-template-columns: 1fr; gap: 4px; }
+        }
+        @media (max-width: 480px) {
+          .check-grid { grid-template-columns: 1fr !important; }
+        }
+
+        /* ── Scan line on terminal ────────────────────────────────*/
+        @keyframes scan {
+          0%   { top: 0; opacity: 0; }
+          5%   { opacity: 1; }
+          95%  { opacity: 1; }
+          100% { top: 100%; opacity: 0; }
         }
       `}</style>
 
-      {/* Nav */}
-      <nav style={{ borderBottom: "1px solid #1a1a1a", padding: "0 32px", height: 52, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "rgba(12,12,12,0.9)", backdropFilter: "blur(8px)", zIndex: 10 }}>
-        <span className="mono" style={{ fontSize: 13, color: "#ededed", letterSpacing: "0.06em" }}>AGENTSHIELD</span>
-        <div style={{ display: "flex", alignItems: "center", gap: 28 }}>
-          <a href="https://github.com/lucarizzo03/AgentShieldv2" target="_blank" rel="noreferrer" className="landing-link">GitHub</a>
-          <a href="#how-it-works" className="landing-link">How it works</a>
-          <a href="#integrate" className="landing-link">Integrate</a>
-          <Link to="/auth" className="btn-primary" style={{ padding: "6px 14px", fontSize: 12 }}>Sign in</Link>
-        </div>
-      </nav>
+      {/* Background layers */}
+      <div className="bg-grid" />
+      <div className="orb orb-1" />
+      <div className="orb orb-2" />
 
-      {/* Hero */}
-      <section style={{ maxWidth: 860, margin: "0 auto", padding: "96px 32px 80px" }}>
-        <div className="mono" style={{ fontSize: 11, color: "#555", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 20 }}>
-          Spending firewall for AI agents
-        </div>
-        <h1 style={{ fontSize: "clamp(2.2rem, 5.5vw, 3.8rem)", fontWeight: 600, lineHeight: 1.1, letterSpacing: "-0.02em", maxWidth: 680, marginBottom: 20 }}>
-          Your AI agents need a spending policy.
-        </h1>
-        <p style={{ fontSize: 17, color: "#888", lineHeight: 1.65, maxWidth: 540, marginBottom: 36 }}>
-          Before an agent executes a payment, it asks AgentShield. Four checks run in under 200 ms — budget, policy, semantics, and goal drift. You get back one of three answers.
-        </p>
+      {/* Content wrapper */}
+      <div style={{ position: "relative", zIndex: 1 }}>
 
-        {/* Verdict pills */}
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 36 }}>
-          {verdicts.map((v) => (
-            <span
-              key={v.label}
-              className="mono"
-              style={{ fontSize: 11, padding: "4px 10px", border: `1px solid ${v.border}`, background: v.bg, color: v.color, letterSpacing: "0.06em" }}
-            >
-              {v.code} {v.label}
-            </span>
-          ))}
-        </div>
-
-        <div className="hero-ctas" style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-          <Link to="/auth" className="btn-primary">Get Started →</Link>
-          <a href="https://github.com/lucarizzo03/AgentShieldv2" target="_blank" rel="noreferrer" className="btn-ghost">View GitHub</a>
-        </div>
-      </section>
-
-      {/* Divider */}
-      <div style={{ borderTop: "1px solid #1a1a1a" }} />
-
-      {/* How it works */}
-      <section id="how-it-works" style={{ maxWidth: 860, margin: "0 auto", padding: "72px 32px" }}>
-        <div className="mono" style={{ fontSize: 11, color: "#555", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
-          How it works
-        </div>
-        <h2 style={{ fontSize: "clamp(1.5rem, 3vw, 2rem)", fontWeight: 600, letterSpacing: "-0.015em", marginBottom: 12 }}>
-          Four checks. One verdict.
-        </h2>
-        <p style={{ color: "#666", fontSize: 15, marginBottom: 40, lineHeight: 1.6 }}>
-          Checks A and B run sequentially. If either hard-denies, C and D are skipped entirely — no Claude API call is made. C and D run in parallel only when A and B both pass.
-        </p>
-
-        <div className="check-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
-          {checks.map((c) => (
-            <div key={c.id} className="check-card">
-              <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 12 }}>
-                <span className="mono" style={{ fontSize: 11, color: "#444", letterSpacing: "0.1em" }}>CHECK {c.id}</span>
-              </div>
-              <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 4 }}>{c.label}</div>
-              <div className="mono" style={{ fontSize: 11, color: "#555", marginBottom: 10 }}>{c.where}</div>
-              <div style={{ fontSize: 13, color: "#777", lineHeight: 1.55 }}>{c.desc}</div>
-            </div>
-          ))}
-        </div>
-
-        {/* Verdict cards */}
-        <div className="verdict-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 32 }}>
-          {verdicts.map((v) => (
-            <div key={v.label} style={{ border: `1px solid ${v.border}`, background: v.bg, padding: "18px 20px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                <span className="mono" style={{ fontSize: 10, color: "#555" }}>{v.code}</span>
-                <span className="mono" style={{ fontSize: 12, color: v.color, letterSpacing: "0.06em" }}>{v.label}</span>
-              </div>
-              <p style={{ fontSize: 13, color: "#888", lineHeight: 1.5 }}>{v.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Divider */}
-      <div style={{ borderTop: "1px solid #1a1a1a" }} />
-
-      {/* Code integration */}
-      <section id="integrate" style={{ maxWidth: 860, margin: "0 auto", padding: "72px 32px" }}>
-        <div className="mono" style={{ fontSize: 11, color: "#555", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
-          Integrate
-        </div>
-        <h2 style={{ fontSize: "clamp(1.5rem, 3vw, 2rem)", fontWeight: 600, letterSpacing: "-0.015em", marginBottom: 12 }}>
-          Add a firewall in minutes.
-        </h2>
-        <p style={{ color: "#666", fontSize: 15, marginBottom: 32, lineHeight: 1.6 }}>
-          Install the SDK, create an agent in the dashboard, and wrap any payment call. That's it.
-        </p>
-
-        {/* Install step */}
-        <div style={{ marginBottom: 16 }}>
-          <div className="mono" style={{ fontSize: 11, color: "#444", letterSpacing: "0.1em", marginBottom: 8 }}>1 · INSTALL</div>
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", padding: "14px 18px" }}>
-            <pre className="mono" style={{ fontSize: 13, color: "#ededed", lineHeight: 1.5 }}>
-              <span style={{ color: "#555" }}>$ </span>{CODE_PYTHON}
-            </pre>
+        {/* ── Nav ───────────────────────────────────────────────── */}
+        <nav style={{ borderBottom: "1px solid #161616", padding: "0 32px", height: 52, display: "flex", alignItems: "center", justifyContent: "space-between", position: "sticky", top: 0, background: "rgba(12,12,12,0.85)", backdropFilter: "blur(12px)", zIndex: 10 }}>
+          <span className="mono" style={{ fontSize: 12, color: "#ededed", letterSpacing: "0.08em" }}>AGENTSHIELD</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 26 }}>
+            <a href="#how-it-works" className="lnk">How it works</a>
+            <a href="#integrate" className="lnk">Integrate</a>
+            <a href="https://github.com/lucarizzo03/AgentShieldv2" target="_blank" rel="noreferrer" className="lnk">GitHub</a>
+            <Link to="/auth" className="btn-p" style={{ padding: "5px 14px", fontSize: 12 }}>Sign in</Link>
           </div>
-        </div>
+        </nav>
 
-        {/* Usage step */}
-        <div>
-          <div className="mono" style={{ fontSize: 11, color: "#444", letterSpacing: "0.1em", marginBottom: 8 }}>2 · CALL THE FIREWALL</div>
-          <div style={{ background: "#111", border: "1px solid #1e1e1e" }}>
-            <div style={{ borderBottom: "1px solid #1a1a1a", padding: "10px 18px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div>
-                <Tab active={codeTab === "python"} onClick={() => setCodeTab("python")}>Python</Tab>
+        {/* ── Hero ──────────────────────────────────────────────── */}
+        <section style={{ maxWidth: 1040, margin: "0 auto", padding: "80px 32px 72px" }}>
+          <div className="hero-cols" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 48, alignItems: "center" }}>
+
+            {/* Left: copy */}
+            <div>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 8, border: "1px solid #1e1e1e", background: "#111", padding: "4px 10px", marginBottom: 24 }}>
+                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00C853", boxShadow: "0 0 6px #00C853" }} />
+                <span className="mono" style={{ fontSize: 10, color: "#555", letterSpacing: "0.1em" }}>SPENDING FIREWALL · LIVE</span>
+              </div>
+
+              <h1 style={{ fontSize: "clamp(2rem, 4vw, 3rem)", fontWeight: 600, lineHeight: 1.08, letterSpacing: "-0.025em", marginBottom: 18 }}>
+                Your AI agents<br />need a firewall.
+              </h1>
+
+              <p style={{ fontSize: 15, color: "#777", lineHeight: 1.7, marginBottom: 28, maxWidth: 420 }}>
+                Before an agent executes a payment, it submits a spend intent to AgentShield. Four checks run in sequence and parallel — budget, policy, semantics, goal drift — and you get back one of three answers.
+              </p>
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 28 }}>
+                {verdicts.map((v) => (
+                  <span key={v.label} className="mono" style={{ fontSize: 10, padding: "3px 9px", border: `1px solid ${v.border}`, background: v.bg, color: v.color, letterSpacing: "0.08em" }}>
+                    {v.code} {v.label}
+                  </span>
+                ))}
+              </div>
+
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                <Link to="/auth" className="btn-p">Start for free →</Link>
+                <a href="https://github.com/lucarizzo03/AgentShieldv2" target="_blank" rel="noreferrer" className="btn-g">View GitHub</a>
+              </div>
+            </div>
+
+            {/* Right: terminal mockup */}
+            <div style={{ position: "relative" }}>
+              <CodeWindow title="spend_request.py" style={{ position: "relative", overflow: "hidden" }}>
+                {/* Scan line */}
+                <div style={{ position: "absolute", left: 0, right: 0, height: 1, background: "linear-gradient(90deg, transparent, rgba(79,193,255,0.15), transparent)", animation: "scan 6s linear infinite", pointerEvents: "none", zIndex: 2 }} />
+                <div className="code-body">
+                  {PYTHON.slice(0, 10).map((segs, i) => (
+                    <div key={i} className="code-line mono" style={{ fontSize: 12 }}>
+                      <span className="ln">{segs ? i + 1 : ""}</span>
+                      {segs ? segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def }}>{text}</span>) : null}
+                    </div>
+                  ))}
+                  <div className="code-line mono" style={{ fontSize: 12, opacity: 0.4 }}>
+                    <span className="ln">…</span>
+                    <span style={{ color: T.cmt }}>{"# verdict: SAFE | SUSPICIOUS | MALICIOUS"}</span>
+                  </div>
+                </div>
+
+                {/* Response badge */}
+                <div style={{ borderTop: "1px solid #1e1e1e", padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                  <span className="mono" style={{ fontSize: 10, color: "#444" }}>RESPONSE</span>
+                  <span className="mono" style={{ fontSize: 10, padding: "2px 8px", background: "rgba(0,200,83,0.1)", border: "1px solid rgba(0,200,83,0.2)", color: "#00C853", letterSpacing: "0.06em" }}>200 SAFE</span>
+                  <span className="mono" style={{ fontSize: 10, color: "#333", marginLeft: "auto" }}>142 ms</span>
+                </div>
+              </CodeWindow>
+
+              {/* Glow under terminal */}
+              <div style={{ position: "absolute", bottom: -30, left: "10%", right: "10%", height: 40, background: "rgba(10,132,255,0.08)", filter: "blur(20px)", pointerEvents: "none" }} />
+            </div>
+          </div>
+        </section>
+
+        <div style={{ borderTop: "1px solid #161616" }} />
+
+        {/* ── How it works ──────────────────────────────────────── */}
+        <section id="how-it-works" style={{ maxWidth: 1040, margin: "0 auto", padding: "72px 32px" }}>
+          <div className="lbl mono" style={{ marginBottom: 10 }}>How it works</div>
+          <h2 style={{ fontSize: "clamp(1.5rem, 3vw, 2.1rem)", fontWeight: 600, letterSpacing: "-0.018em", marginBottom: 10 }}>Four checks. One verdict.</h2>
+          <p style={{ color: "#555", fontSize: 14, marginBottom: 40, lineHeight: 1.65, maxWidth: 560 }}>
+            A and B run sequentially. If either hard-denies, C and D are skipped — no Claude API call is made. C and D run in parallel only when A and B both pass.
+          </p>
+
+          <div className="check-grid" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, border: "1px solid #1a1a1a", marginBottom: 1 }}>
+            {checks.map((c) => (
+              <div key={c.id} className="check-card" style={{ border: "none", borderRight: "1px solid #1a1a1a" }}>
+                <div className="mono lbl" style={{ marginBottom: 14 }}>CHECK {c.id}</div>
+                <div style={{ fontSize: 14, fontWeight: 500, marginBottom: 3 }}>{c.label}</div>
+                <div className="mono" style={{ fontSize: 11, color: "#3a3a3a", marginBottom: 12 }}>{c.where}</div>
+                <div style={{ fontSize: 13, color: "#666", lineHeight: 1.6 }}>{c.desc}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Pipeline diagram */}
+          <div style={{ border: "1px solid #1a1a1a", background: "#0e0e0e", padding: "14px 18px", marginBottom: 24 }}>
+            <div className="mono" style={{ fontSize: 11, color: "#333", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <span style={{ color: "#4FC1FF" }}>A</span>
+              <span style={{ color: "#2a2a2a" }}>→</span>
+              <span style={{ color: "#4FC1FF" }}>B</span>
+              <span style={{ color: "#2a2a2a" }}>→</span>
+              <span style={{ color: "#888" }}>[if pass]</span>
+              <span style={{ color: "#2a2a2a" }}>→</span>
+              <span style={{ color: "#4FC1FF" }}>C</span>
+              <span style={{ color: "#444" }}> ∥ </span>
+              <span style={{ color: "#4FC1FF" }}>D</span>
+              <span style={{ color: "#2a2a2a" }}>→</span>
+              <span style={{ color: "#00C853" }}>SAFE</span>
+              <span style={{ color: "#333" }}> / </span>
+              <span style={{ color: "#FF9500" }}>SUSPICIOUS</span>
+              <span style={{ color: "#333" }}> / </span>
+              <span style={{ color: "#FF3B30" }}>MALICIOUS</span>
+            </div>
+          </div>
+
+          {/* Verdict cards */}
+          <div className="verdict-grid" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 1, border: "1px solid #1a1a1a" }}>
+            {verdicts.map((v) => (
+              <div key={v.label} style={{ padding: "18px 20px", background: "#0e0e0e", borderRight: "1px solid #1a1a1a" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+                  <span className="mono" style={{ fontSize: 10, color: "#333" }}>{v.code}</span>
+                  <span className="mono" style={{ fontSize: 12, color: v.color, letterSpacing: "0.06em" }}>{v.label}</span>
+                </div>
+                <p style={{ fontSize: 13, color: "#666", lineHeight: 1.5 }}>{v.desc}</p>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <div style={{ borderTop: "1px solid #161616" }} />
+
+        {/* ── Integrate ─────────────────────────────────────────── */}
+        <section id="integrate" style={{ maxWidth: 1040, margin: "0 auto", padding: "72px 32px" }}>
+          <div className="lbl mono" style={{ marginBottom: 10 }}>Integrate</div>
+          <h2 style={{ fontSize: "clamp(1.5rem, 3vw, 2.1rem)", fontWeight: 600, letterSpacing: "-0.018em", marginBottom: 10 }}>Add a firewall in minutes.</h2>
+          <p style={{ color: "#555", fontSize: 14, marginBottom: 36, lineHeight: 1.65 }}>
+            Install the SDK, create an agent in the dashboard, and wrap any payment call.
+          </p>
+
+          {/* Step 1: install */}
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 14 }}>
+            <div className="mono" style={{ fontSize: 11, color: "#333", paddingTop: 14, minWidth: 24 }}>01</div>
+            <CodeWindow title="terminal" style={{ flex: 1 }}>
+              <div className="code-body" style={{ padding: "12px 18px" }}>
+                <div className="code-line mono" style={{ fontSize: 12.5 }}>
+                  <span style={{ color: "#333", marginRight: 12 }}>$</span>
+                  <span style={{ color: "#4FC1FF" }}>pip install</span>
+                  <span style={{ color: T.def }}> agentshield-pythonv2</span>
+                </div>
+              </div>
+            </CodeWindow>
+          </div>
+
+          {/* Step 2: usage */}
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 14 }}>
+            <div className="mono" style={{ fontSize: 11, color: "#333", paddingTop: 14, minWidth: 24 }}>02</div>
+            <CodeWindow style={{ flex: 1 }}>
+              <div style={{ borderBottom: "1px solid #1e1e1e", padding: "8px 14px", display: "flex" }}>
+                <Tab active={codeTab === "python"} onClick={() => setCodeTab("python")}>Python SDK</Tab>
                 <Tab active={codeTab === "curl"} onClick={() => setCodeTab("curl")}>cURL</Tab>
               </div>
+              <div className="code-body">
+                {lines.map((segs, i) => (
+                  <div key={i} className="code-line mono" style={{ fontSize: 12 }}>
+                    <span className="ln">{segs ? i + 1 : ""}</span>
+                    {segs ? segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def }}>{text}</span>) : null}
+                  </div>
+                ))}
+              </div>
+            </CodeWindow>
+          </div>
+
+          {/* Step 3: response */}
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
+            <div className="mono" style={{ fontSize: 11, color: "#333", paddingTop: 14, minWidth: 24 }}>03</div>
+            <CodeWindow style={{ flex: 1 }}>
+              <div style={{ borderBottom: "1px solid #1e1e1e", padding: "8px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                <span className="mono" style={{ fontSize: 10, color: "#333" }}>RESPONSE</span>
+                <span className="mono" style={{ fontSize: 10, padding: "2px 8px", background: "rgba(0,200,83,0.08)", border: "1px solid rgba(0,200,83,0.18)", color: "#00C853" }}>200 SAFE</span>
+              </div>
+              <div className="code-body">
+                {RESPONSE.map((segs, i) => (
+                  <div key={i} className="code-line mono" style={{ fontSize: 12 }}>
+                    <span className="ln">{i + 1}</span>
+                    {segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def }}>{text}</span>)}
+                  </div>
+                ))}
+              </div>
+            </CodeWindow>
+          </div>
+        </section>
+
+        <div style={{ borderTop: "1px solid #161616" }} />
+
+        {/* ── Features ──────────────────────────────────────────── */}
+        <section style={{ maxWidth: 1040, margin: "0 auto", padding: "72px 32px" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 48 }}>
+            <div>
+              <div className="lbl mono" style={{ marginBottom: 10 }}>Built-in</div>
+              <h2 style={{ fontSize: "clamp(1.5rem, 3vw, 2.1rem)", fontWeight: 600, letterSpacing: "-0.018em", marginBottom: 10 }}>Everything you need.</h2>
+              <p style={{ color: "#555", fontSize: 14, lineHeight: 1.65 }}>
+                No payment adapters, no SDK lock-in, no magic. AgentShield only decides — yes, wait, or no. The agent is responsible for acting on the verdict.
+              </p>
             </div>
-            <div style={{ padding: "18px 20px", overflowX: "auto" }}>
-              <pre className="mono" style={{ fontSize: 12.5, color: "#ccc", lineHeight: 1.65, whiteSpace: "pre" }}>{activeCode}</pre>
+            <div>
+              {features.map((f) => (
+                <div key={f.label} className="feat">
+                  <div style={{ fontSize: 13, fontWeight: 500, color: "#bbb" }}>{f.label}</div>
+                  <div style={{ fontSize: 13, color: "#555", lineHeight: 1.6 }}>{f.desc}</div>
+                </div>
+              ))}
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Response preview */}
-        <div style={{ marginTop: 16, background: "#111", border: "1px solid #1e1e1e" }}>
-          <div style={{ borderBottom: "1px solid #1a1a1a", padding: "10px 18px" }}>
-            <span className="mono" style={{ fontSize: 11, color: "#444", letterSpacing: "0.1em" }}>RESPONSE</span>
+        <div style={{ borderTop: "1px solid #161616" }} />
+
+        {/* ── CTA ───────────────────────────────────────────────── */}
+        <section style={{ maxWidth: 1040, margin: "0 auto", padding: "88px 32px 96px", textAlign: "center" }}>
+          <div className="mono" style={{ fontSize: 10, letterSpacing: "0.12em", color: "#00C853", marginBottom: 18 }}>
+            ● LIVE · SAFE AND MALICIOUS VERDICTS FULLY OPERATIONAL
           </div>
-          <div style={{ padding: "18px 20px" }}>
-            <pre className="mono" style={{ fontSize: 12.5, color: "#ccc", lineHeight: 1.65 }}>{`{
-  "verdict": "SAFE",
-  "status": "APPROVED_EXECUTED",
-  "request_id": "req_01JW...",
-  "approved_amount_cents": 25000,
-  "reasons": [
-    "BUDGET_WITHIN_LIMIT",
-    "VENDOR_ALLOWED",
-    "SEMANTIC_ALIGNMENT_HIGH",
-    "GOAL_WITHIN_SCOPE"
-  ],
-  "agent_feedback": {
-    "check_a_quantitative": { "passed": true },
-    "check_b_policy":       { "passed": true },
-    "check_c_semantic":     { "alignment_label": "ALIGNED", "risk_score": 12 },
-    "check_d_goal_drift":   { "within_scope": true, "matched_scope": "travel booking" }
-  }
-}`}</pre>
+          <h2 style={{ fontSize: "clamp(1.8rem, 4vw, 3rem)", fontWeight: 600, letterSpacing: "-0.025em", marginBottom: 16 }}>
+            Start protecting your agents.
+          </h2>
+          <p style={{ color: "#555", fontSize: 15, marginBottom: 36, maxWidth: 400, margin: "0 auto 36px" }}>
+            Create an account, spin up an agent, and make your first protected request in under five minutes.
+          </p>
+          <Link to="/auth" className="btn-p">Start for free →</Link>
+        </section>
+
+        {/* ── Footer ────────────────────────────────────────────── */}
+        <footer style={{ borderTop: "1px solid #161616", padding: "18px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+          <span className="mono" style={{ fontSize: 11, color: "#2a2a2a", letterSpacing: "0.06em" }}>AGENTSHIELD</span>
+          <div style={{ display: "flex", gap: 22 }}>
+            <a href="https://github.com/lucarizzo03/AgentShieldv2" target="_blank" rel="noreferrer" className="lnk">GitHub</a>
+            <a href="mailto:rizzoluca2003@gmail.com" className="lnk">Contact</a>
+            <Link to="/auth" className="lnk">Sign in</Link>
           </div>
-        </div>
-      </section>
+        </footer>
 
-      {/* Divider */}
-      <div style={{ borderTop: "1px solid #1a1a1a" }} />
-
-      {/* Features */}
-      <section style={{ maxWidth: 860, margin: "0 auto", padding: "72px 32px" }}>
-        <div className="mono" style={{ fontSize: 11, color: "#555", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 10 }}>
-          Built-in
-        </div>
-        <h2 style={{ fontSize: "clamp(1.5rem, 3vw, 2rem)", fontWeight: 600, letterSpacing: "-0.015em", marginBottom: 32 }}>
-          Everything you need, nothing you don't.
-        </h2>
-        <div>
-          {features.map((f) => (
-            <div key={f.label} className="feature-item">
-              <div style={{ fontSize: 13, fontWeight: 500, color: "#ccc" }}>{f.label}</div>
-              <div style={{ fontSize: 13, color: "#666", lineHeight: 1.55 }}>{f.desc}</div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Divider */}
-      <div style={{ borderTop: "1px solid #1a1a1a" }} />
-
-      {/* CTA */}
-      <section style={{ maxWidth: 860, margin: "0 auto", padding: "80px 32px 96px", textAlign: "center" }}>
-        <div className="mono" style={{ fontSize: 11, color: "#00C853", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 16 }}>
-          ● Live
-        </div>
-        <h2 style={{ fontSize: "clamp(1.8rem, 4vw, 2.8rem)", fontWeight: 600, letterSpacing: "-0.02em", marginBottom: 16 }}>
-          Start protecting your agents.
-        </h2>
-        <p style={{ color: "#666", fontSize: 15, marginBottom: 36, maxWidth: 440, margin: "0 auto 36px" }}>
-          Create an account, spin up an agent, and make your first protected spend request in under five minutes.
-        </p>
-        <Link to="/auth" className="btn-primary">Get Started →</Link>
-      </section>
-
-      {/* Footer */}
-      <footer style={{ borderTop: "1px solid #1a1a1a", padding: "20px 32px", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
-        <span className="mono" style={{ fontSize: 11, color: "#333", letterSpacing: "0.06em" }}>AGENTSHIELD</span>
-        <div style={{ display: "flex", gap: 24 }}>
-          <a href="https://github.com/lucarizzo03/AgentShieldv2" target="_blank" rel="noreferrer" className="landing-link">GitHub</a>
-          <a href="mailto:rizzoluca2003@gmail.com" className="landing-link">Contact</a>
-          <Link to="/auth" className="landing-link">Sign in</Link>
-        </div>
-      </footer>
+      </div>
     </div>
   );
 }
