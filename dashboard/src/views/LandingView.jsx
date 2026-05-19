@@ -40,7 +40,7 @@ const PYTHON = [
   [["client", "def"], [" = ", "op"], ["AgentShield", "cls"], ["(", "op"]],
   [["    agent_id", "key"], ["=", "op"], ['"agt_..."', "str"], [",", "op"]],
   [["    hmac_secret", "key"], ["=", "op"], ['"sk_live_..."', "str"], [",", "op"]],
-  [["    base_url", "key"], ["=", "op"], ['"https://api.agentshield.dev"', "str"], [",", "op"]],
+  [["    base_url", "key"], ["=", "op"], ['"https://agentshieldv2-backend-production.up.railway.app"', "str"], [",", "op"]],
   [[")", "op"]],
   null,
   [["result", "def"], [" = ", "op"], ["client", "def"], [".", "op"], ["spend_request", "fn"], ["(", "op"], ["SpendRequest", "cls"], ["(", "op"]],
@@ -320,7 +320,7 @@ export default function LandingView() {
 
             {/* Right: terminal mockup */}
             <div style={{ position: "relative" }}>
-              <CodeWindow title="spend_request.py" style={{ position: "relative", overflow: "hidden" }}>
+              <CodeWindow style={{ position: "relative", overflow: "hidden" }}>
                 {/* Scan line */}
                 <div style={{ position: "absolute", left: 0, right: 0, height: 1, background: "linear-gradient(90deg, transparent, rgba(79,193,255,0.15), transparent)", animation: "scan 6s linear infinite", pointerEvents: "none", zIndex: 2 }} />
                 <div className="code-body mono" style={{ fontSize: 12 }}>
@@ -333,7 +333,6 @@ export default function LandingView() {
                 <div style={{ borderTop: "1px solid #1e1e1e", padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
                   <span className="mono" style={{ fontSize: 10, color: "#444" }}>RESPONSE</span>
                   <span className="mono" style={{ fontSize: 10, padding: "2px 8px", background: "#161616", border: "1px solid #2a2a2a", color: "#888", letterSpacing: "0.06em" }}>200 SAFE</span>
-                  <span className="mono" style={{ fontSize: 10, color: "#333", marginLeft: "auto" }}>142 ms</span>
                 </div>
               </CodeWindow>
 
@@ -406,54 +405,32 @@ export default function LandingView() {
           <div className="lbl mono" style={{ marginBottom: 10 }}>Integrate</div>
           <h2 style={{ fontSize: "clamp(1.5rem, 3vw, 2.1rem)", fontWeight: 600, letterSpacing: "-0.018em", marginBottom: 10 }}>Add a firewall in minutes.</h2>
           <p style={{ color: "#555", fontSize: 14, marginBottom: 36, lineHeight: 1.65 }}>
-            Install the SDK, create an agent in the dashboard, and wrap any payment call.
+            Start for free, grab your credentials, and wrap any payment call.
           </p>
 
-          {/* Step 1: install */}
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 14 }}>
-            <div className="mono" style={{ fontSize: 11, color: "#333", paddingTop: 14, minWidth: 24 }}>01</div>
-            <CodeWindow title="terminal" style={{ flex: 1 }}>
-              <div className="code-body" style={{ padding: "12px 18px" }}>
-                <div className="code-line mono" style={{ fontSize: 12.5 }}>
-                  <span style={{ color: "#333", marginRight: 12 }}>$</span>
-                  <span style={{ color: "#4FC1FF" }}>pip install</span>
-                  <span style={{ color: T.def }}> agentshield-pythonv2</span>
-                </div>
-              </div>
-            </CodeWindow>
-          </div>
+          <CodeWindow style={{ marginBottom: 12 }}>
+            <div style={{ borderBottom: "1px solid #1e1e1e", padding: "8px 14px", display: "flex" }}>
+              <Tab active={codeTab === "python"} onClick={() => setCodeTab("python")}>Python SDK</Tab>
+              <Tab active={codeTab === "curl"} onClick={() => setCodeTab("curl")}>cURL</Tab>
+            </div>
+            <div className="code-body mono" style={{ fontSize: 12 }}>
+              {lines.map((segs, i) => (
+                <CodeRow key={i} segs={segs} lineNum={i + 1} />
+              ))}
+            </div>
+          </CodeWindow>
 
-          {/* Step 2: usage */}
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 14 }}>
-            <div className="mono" style={{ fontSize: 11, color: "#333", paddingTop: 14, minWidth: 24 }}>02</div>
-            <CodeWindow style={{ flex: 1 }}>
-              <div style={{ borderBottom: "1px solid #1e1e1e", padding: "8px 14px", display: "flex" }}>
-                <Tab active={codeTab === "python"} onClick={() => setCodeTab("python")}>Python SDK</Tab>
-                <Tab active={codeTab === "curl"} onClick={() => setCodeTab("curl")}>cURL</Tab>
-              </div>
-              <div className="code-body mono" style={{ fontSize: 12 }}>
-                {lines.map((segs, i) => (
-                  <CodeRow key={i} segs={segs} lineNum={i + 1} />
-                ))}
-              </div>
-            </CodeWindow>
-          </div>
-
-          {/* Step 3: response */}
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
-            <div className="mono" style={{ fontSize: 11, color: "#333", paddingTop: 14, minWidth: 24 }}>03</div>
-            <CodeWindow style={{ flex: 1 }}>
-              <div style={{ borderBottom: "1px solid #1e1e1e", padding: "8px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-                <span className="mono" style={{ fontSize: 10, color: "#333" }}>RESPONSE</span>
-                <span className="mono" style={{ fontSize: 10, padding: "2px 8px", background: "#161616", border: "1px solid #2a2a2a", color: "#888" }}>200 SAFE</span>
-              </div>
-              <div className="code-body mono" style={{ fontSize: 12 }}>
-                {RESPONSE.map((segs, i) => (
-                  <CodeRow key={i} segs={segs} lineNum={i + 1} />
-                ))}
-              </div>
-            </CodeWindow>
-          </div>
+          <CodeWindow>
+            <div style={{ borderBottom: "1px solid #1e1e1e", padding: "8px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+              <span className="mono" style={{ fontSize: 10, color: "#333" }}>RESPONSE</span>
+              <span className="mono" style={{ fontSize: 10, padding: "2px 8px", background: "#161616", border: "1px solid #2a2a2a", color: "#888" }}>200 SAFE</span>
+            </div>
+            <div className="code-body mono" style={{ fontSize: 12 }}>
+              {RESPONSE.map((segs, i) => (
+                <CodeRow key={i} segs={segs} lineNum={i + 1} />
+              ))}
+            </div>
+          </CodeWindow>
         </section>
 
         <div style={{ borderTop: "1px solid #161616" }} />
