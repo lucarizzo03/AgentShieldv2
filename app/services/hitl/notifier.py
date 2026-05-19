@@ -120,9 +120,10 @@ def _build_html(
 
 
 class HitlNotifier:
-    async def send_notification(self, agent: Agent, pending: PendingSpend) -> None:
+    async def send_notification(self, agent: Agent, pending: PendingSpend, recipient_email: str | None = None) -> None:
         settings = get_settings()
-        if not settings.sendgrid_api_key or not settings.hitl_email_to:
+        to_email = recipient_email or settings.hitl_email_to
+        if not settings.sendgrid_api_key or not to_email:
             logger.info(
                 "HITL email skipped (SendGrid not configured)",
                 extra={"agent_id": agent.agent_id, "request_id": pending.request_id},
@@ -163,7 +164,7 @@ class HitlNotifier:
         )
 
         payload = {
-            "personalizations": [{"to": [{"email": settings.hitl_email_to}]}],
+            "personalizations": [{"to": [{"email": to_email}]}],
             "from": {"email": settings.hitl_email_from or settings.hitl_email_to},
             "subject": subject,
             "content": [
@@ -183,7 +184,7 @@ class HitlNotifier:
         if resp.status_code in (200, 202):
             logger.info(
                 "HITL email sent via SendGrid",
-                extra={"agent_id": agent.agent_id, "request_id": pending.request_id, "to": settings.hitl_email_to},
+                extra={"agent_id": agent.agent_id, "request_id": pending.request_id, "to": to_email},
             )
         else:
             logger.error(

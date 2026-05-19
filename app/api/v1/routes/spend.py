@@ -18,6 +18,7 @@ from app.models.agent import Agent
 from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
+from app.models.user import User
 from app.policy.checks.quantitative import (
     commit_budget_spend,
     finalize_budget_reservation,
@@ -449,7 +450,12 @@ async def spend_request(
                 extra={"agent_id": payload.agent_id, "amount_cents": payload.amount_cents, "request_id": request_id},
                 exc_info=True,
             )
-    await HitlNotifier().send_notification(agent=agent, pending=pending)
+    owner_email: str | None = None
+    if agent.owner_user_id:
+        owner = (await session.exec(select(User).where(User.id == agent.owner_user_id))).first()
+        if owner:
+            owner_email = owner.email
+    await HitlNotifier().send_notification(agent=agent, pending=pending, recipient_email=owner_email)
 
     body = {
         "request_id": request_id,
