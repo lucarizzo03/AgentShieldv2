@@ -243,7 +243,7 @@ export default function DocsPage({ agentId, activeHmac, secretReveal, setSecretR
           <SectionHeader id="overview">Overview</SectionHeader>
           <P>
             AgentShield is a spending firewall for autonomous AI agents. Before an agent executes a
-            payment, it submits a spend intent to the API. The system runs three parallel risk checks
+            payment, it submits a spend intent to the API. The system runs four risk checks
             and returns one of three verdicts.
           </P>
           <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
@@ -251,7 +251,7 @@ export default function DocsPage({ agentId, activeHmac, secretReveal, setSecretR
             <VerdictBadge verdict="SUSPICIOUS" />
             <VerdictBadge verdict="MALICIOUS" />
           </div>
-          <P>Every request runs four checks. Checks A and B run sequentially first — if either hard-denies, C and D are skipped entirely and no Claude API call is made. C and D run in parallel only when A and B both pass.</P>
+          <P>Every request runs four checks. A and B run sequentially first — if either hard-denies, C and D are skipped entirely and no Claude API call is made. C and D run in parallel only when A and B both pass.</P>
           <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 24 }}>
             {[
               ["A · Quantitative", "Redis", "Daily budgets, transaction loop patterns, destination bursting"],
@@ -293,11 +293,13 @@ result = client.spend_request(SpendRequest(
     vendor_url_or_name="delta.com",
     item_description="Economy seat JFK-LAX, Oct 12",
     asset_type="FIAT",
-    destination_address="0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
+    destination_address="fiat-destination-acct-0001",
 ))
 
-print(result.verdict)   # SAFE | SUSPICIOUS | MALICIOUS
-print(result.status_code)  # 200 | 202 | 403`} {...codeProps} />
+if result.approved:
+    execute_payment()
+elif result.pending_hitl:
+    pass  # poll — see Making Requests section`} {...codeProps} />
           <Callout color="blue">
             A <InlineCode>202</InlineCode> response means the request is held for human review — the agent must poll{" "}
             <InlineCode>get_spend_status(request_id)</InlineCode> until resolved.
@@ -387,7 +389,6 @@ elif result.pending_hitl:
           <SubHeader>Polling for HITL resolution</SubHeader>
           <P>When <InlineCode>result.pending_hitl</InlineCode> is true, poll until the human reviewer resolves it:</P>
           <CodeBlock lang="python" code={`import time
-from agentshield import AgentShieldBlockedError
 
 result = client.spend_request(req)
 
@@ -637,8 +638,7 @@ headers = {
             ))}
           </div>
           <CodeBlock lang="python" code={`# Resolve programmatically (e.g. from another agent or admin tool)
-from agentshield import AgentShieldAdmin
-from agentshield.models import HitlResolveRequest
+from agentshield import AgentShieldAdmin, HitlResolveRequest
 
 admin = AgentShieldAdmin(bearer_token="your-auth0-token")
 admin.resolve_hitl(
