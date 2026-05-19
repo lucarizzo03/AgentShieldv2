@@ -15,7 +15,7 @@ const T = {
 };
 
 function Seg({ t, children }) {
-  return <span style={{ color: T[t] || T.def }}>{children}</span>;
+  return <span style={{ color: T[t] || T.def, whiteSpace: "pre" }}>{children}</span>;
 }
 
 function CodeLine({ segs }) {
@@ -46,24 +46,24 @@ const PYTHON = [
   [["    destination_address", "key"], ["=", "op"], ['"0x742d35..."', "str"], [",", "op"]],
   [["))", "op"]],
   null,
-  [["print", "fn"], ["(result", "def"], [".", "op"], ["verdict", "key"], [")   ", "op"], ["# SAFE | SUSPICIOUS | MALICIOUS", "cmt"]],
+  [["print", "fn"], ["(", "op"], ["result", "def"], [".", "op"], ["verdict", "key"], [")", "op"], ["   ", "def"], ["# SAFE | SUSPICIOUS | MALICIOUS", "cmt"]],
 ];
 
 // ─── cURL code ───────────────────────────────────────────────────────────────
 const CURL = [
-  [["curl", "fn"], [" -X ", "op"], ["POST ", "str"], ["\\", "op"]],
+  [["curl", "fn"], [" -X ", "op"], ["POST", "str"], [" \\", "op"]],
   [["  https://api.agentshield.dev/v1/spend-request", "def"], [" \\", "op"]],
   [["  -H ", "op"], ['"Content-Type: application/json"', "str"], [" \\", "op"]],
   [["  -H ", "op"], ['"x-agent-id: agt_..."', "str"], [" \\", "op"]],
   [["  -H ", "op"], ['"x-timestamp: 2026-05-18T12:00:00Z"', "str"], [" \\", "op"]],
   [["  -H ", "op"], ['"x-signature: sha256=<hmac>"', "str"], [" \\", "op"]],
-  [["  -d ", "op"], ["'\\{", "str"]],
-  [["    ", "def"], ['"agent_id"', "key"], [": ", "op"], ['"agt_..."', "str"], [",", "op"]],
-  [["    ", "def"], ['"declared_goal"', "key"], [": ", "op"], ['"Book flight JFK to LAX"', "str"], [",", "op"]],
-  [["    ", "def"], ['"amount_cents"', "key"], [": ", "op"], ["25000", "num"], [",", "op"]],
-  [["    ", "def"], ['"vendor_url_or_name"', "key"], [": ", "op"], ['"delta.com"', "str"], [",", "op"]],
-  [["    ", "def"], ['"asset_type"', "key"], [": ", "op"], ['"FIAT"', "str"]],
-  [["  \\}'", "str"]],
+  [["  -d ", "op"], ["'{", "str"]],
+  [["    ", "def"], ['"agent_id"', "key"], [":  ", "op"], ['"agt_..."', "str"], [",", "op"]],
+  [["    ", "def"], ['"declared_goal"', "key"], [":  ", "op"], ['"Book flight JFK to LAX"', "str"], [",", "op"]],
+  [["    ", "def"], ['"amount_cents"', "key"], [":  ", "op"], ["25000", "num"], [",", "op"]],
+  [["    ", "def"], ['"vendor_url_or_name"', "key"], [":  ", "op"], ['"delta.com"', "str"], [",", "op"]],
+  [["    ", "def"], ['"asset_type"', "key"], [":  ", "op"], ['"FIAT"', "str"]],
+  [["  }'", "str"]],
 ];
 
 // ─── Response preview ────────────────────────────────────────────────────────
@@ -83,9 +83,9 @@ const RESPONSE = [
 ];
 
 const verdicts = [
-  { code: "200", label: "SAFE",       color: "#00C853", bg: "rgba(0,200,83,0.07)",   border: "rgba(0,200,83,0.18)",   desc: "Cleared. Agent may proceed." },
-  { code: "202", label: "SUSPICIOUS", color: "#FF9500", bg: "rgba(255,149,0,0.07)",  border: "rgba(255,149,0,0.18)",  desc: "Held. Human review required." },
-  { code: "403", label: "MALICIOUS",  color: "#FF3B30", bg: "rgba(255,59,48,0.07)",  border: "rgba(255,59,48,0.18)",  desc: "Blocked. Do not retry." },
+  { code: "200", label: "SAFE",       desc: "Cleared. Agent may proceed." },
+  { code: "202", label: "SUSPICIOUS", desc: "Held. Human review required." },
+  { code: "403", label: "MALICIOUS",  desc: "Blocked. Do not retry." },
 ];
 
 const checks = [
@@ -164,13 +164,13 @@ export default function LandingView() {
         .orb-1 {
           width: 600px; height: 600px;
           top: -180px; right: -120px;
-          background: radial-gradient(circle, rgba(10,132,255,0.09) 0%, transparent 70%);
+          background: radial-gradient(circle, rgba(255,255,255,0.025) 0%, transparent 70%);
           animation: orbDrift1 22s ease-in-out infinite;
         }
         .orb-2 {
           width: 800px; height: 800px;
           bottom: -200px; left: -200px;
-          background: radial-gradient(circle, rgba(0,200,83,0.06) 0%, transparent 70%);
+          background: radial-gradient(circle, rgba(255,255,255,0.018) 0%, transparent 70%);
           animation: orbDrift2 28s ease-in-out infinite;
         }
         @keyframes orbDrift1 {
@@ -267,22 +267,22 @@ export default function LandingView() {
 
             {/* Left: copy */}
             <div>
-              <div style={{ display: "inline-flex", alignItems: "center", gap: 8, border: "1px solid #1e1e1e", background: "#111", padding: "4px 10px", marginBottom: 24 }}>
-                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#00C853", boxShadow: "0 0 6px #00C853" }} />
-                <span className="mono" style={{ fontSize: 10, color: "#555", letterSpacing: "0.1em" }}>SPENDING FIREWALL · LIVE</span>
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 8, border: "1px solid #1e1e1e", background: "#111", padding: "4px 10px", marginBottom: 28 }}>
+                <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#ededed" }} />
+                <span className="mono" style={{ fontSize: 10, color: "#555", letterSpacing: "0.1em" }}>LIVE</span>
               </div>
 
-              <h1 style={{ fontSize: "clamp(2rem, 4vw, 3rem)", fontWeight: 600, lineHeight: 1.08, letterSpacing: "-0.025em", marginBottom: 18 }}>
-                Your AI agents<br />need a firewall.
+              <h1 style={{ fontSize: "clamp(2.2rem, 4.5vw, 3.4rem)", fontWeight: 600, lineHeight: 1.06, letterSpacing: "-0.03em", marginBottom: 20 }}>
+                Spending Firewall<br />for AI Agents.
               </h1>
 
               <p style={{ fontSize: 15, color: "#777", lineHeight: 1.7, marginBottom: 28, maxWidth: 420 }}>
-                Before an agent executes a payment, it submits a spend intent to AgentShield. Four checks run in sequence and parallel — budget, policy, semantics, goal drift — and you get back one of three answers.
+                Before an agent executes a payment, it asks AgentShield first. Four checks run in under 200 ms — budget, policy, semantics, goal drift — and you get back one of three answers.
               </p>
 
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 28 }}>
                 {verdicts.map((v) => (
-                  <span key={v.label} className="mono" style={{ fontSize: 10, padding: "3px 9px", border: `1px solid ${v.border}`, background: v.bg, color: v.color, letterSpacing: "0.08em" }}>
+                  <span key={v.label} className="mono" style={{ fontSize: 10, padding: "3px 9px", border: "1px solid #2a2a2a", background: "#111", color: "#888", letterSpacing: "0.08em" }}>
                     {v.code} {v.label}
                   </span>
                 ))}
@@ -303,7 +303,7 @@ export default function LandingView() {
                   {PYTHON.slice(0, 10).map((segs, i) => (
                     <div key={i} className="code-line mono" style={{ fontSize: 12 }}>
                       <span className="ln">{segs ? i + 1 : ""}</span>
-                      {segs ? segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def }}>{text}</span>) : null}
+                      {segs ? segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def, whiteSpace: "pre" }}>{text}</span>) : null}
                     </div>
                   ))}
                   <div className="code-line mono" style={{ fontSize: 12, opacity: 0.4 }}>
@@ -315,13 +315,13 @@ export default function LandingView() {
                 {/* Response badge */}
                 <div style={{ borderTop: "1px solid #1e1e1e", padding: "10px 14px", display: "flex", alignItems: "center", gap: 10 }}>
                   <span className="mono" style={{ fontSize: 10, color: "#444" }}>RESPONSE</span>
-                  <span className="mono" style={{ fontSize: 10, padding: "2px 8px", background: "rgba(0,200,83,0.1)", border: "1px solid rgba(0,200,83,0.2)", color: "#00C853", letterSpacing: "0.06em" }}>200 SAFE</span>
+                  <span className="mono" style={{ fontSize: 10, padding: "2px 8px", background: "#161616", border: "1px solid #2a2a2a", color: "#888", letterSpacing: "0.06em" }}>200 SAFE</span>
                   <span className="mono" style={{ fontSize: 10, color: "#333", marginLeft: "auto" }}>142 ms</span>
                 </div>
               </CodeWindow>
 
               {/* Glow under terminal */}
-              <div style={{ position: "absolute", bottom: -30, left: "10%", right: "10%", height: 40, background: "rgba(10,132,255,0.08)", filter: "blur(20px)", pointerEvents: "none" }} />
+              <div style={{ position: "absolute", bottom: -30, left: "10%", right: "10%", height: 40, background: "rgba(255,255,255,0.03)", filter: "blur(20px)", pointerEvents: "none" }} />
             </div>
           </div>
         </section>
@@ -350,21 +350,21 @@ export default function LandingView() {
           {/* Pipeline diagram */}
           <div style={{ border: "1px solid #1a1a1a", background: "#0e0e0e", padding: "14px 18px", marginBottom: 24 }}>
             <div className="mono" style={{ fontSize: 11, color: "#333", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-              <span style={{ color: "#4FC1FF" }}>A</span>
-              <span style={{ color: "#2a2a2a" }}>→</span>
-              <span style={{ color: "#4FC1FF" }}>B</span>
-              <span style={{ color: "#2a2a2a" }}>→</span>
-              <span style={{ color: "#888" }}>[if pass]</span>
-              <span style={{ color: "#2a2a2a" }}>→</span>
-              <span style={{ color: "#4FC1FF" }}>C</span>
+              <span style={{ color: "#ccc" }}>A</span>
+              <span style={{ color: "#333" }}>→</span>
+              <span style={{ color: "#ccc" }}>B</span>
+              <span style={{ color: "#333" }}>→</span>
+              <span style={{ color: "#555" }}>[if pass]</span>
+              <span style={{ color: "#333" }}>→</span>
+              <span style={{ color: "#ccc" }}>C</span>
               <span style={{ color: "#444" }}> ∥ </span>
-              <span style={{ color: "#4FC1FF" }}>D</span>
-              <span style={{ color: "#2a2a2a" }}>→</span>
-              <span style={{ color: "#00C853" }}>SAFE</span>
+              <span style={{ color: "#ccc" }}>D</span>
+              <span style={{ color: "#333" }}>→</span>
+              <span style={{ color: "#999" }}>SAFE</span>
               <span style={{ color: "#333" }}> / </span>
-              <span style={{ color: "#FF9500" }}>SUSPICIOUS</span>
+              <span style={{ color: "#999" }}>SUSPICIOUS</span>
               <span style={{ color: "#333" }}> / </span>
-              <span style={{ color: "#FF3B30" }}>MALICIOUS</span>
+              <span style={{ color: "#999" }}>MALICIOUS</span>
             </div>
           </div>
 
@@ -374,7 +374,7 @@ export default function LandingView() {
               <div key={v.label} style={{ padding: "18px 20px", background: "#0e0e0e", borderRight: "1px solid #1a1a1a" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
                   <span className="mono" style={{ fontSize: 10, color: "#333" }}>{v.code}</span>
-                  <span className="mono" style={{ fontSize: 12, color: v.color, letterSpacing: "0.06em" }}>{v.label}</span>
+                  <span className="mono" style={{ fontSize: 12, color: "#aaa", letterSpacing: "0.06em" }}>{v.label}</span>
                 </div>
                 <p style={{ fontSize: 13, color: "#666", lineHeight: 1.5 }}>{v.desc}</p>
               </div>
@@ -418,7 +418,7 @@ export default function LandingView() {
                 {lines.map((segs, i) => (
                   <div key={i} className="code-line mono" style={{ fontSize: 12 }}>
                     <span className="ln">{segs ? i + 1 : ""}</span>
-                    {segs ? segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def }}>{text}</span>) : null}
+                    {segs ? segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def, whiteSpace: "pre" }}>{text}</span>) : null}
                   </div>
                 ))}
               </div>
@@ -431,13 +431,13 @@ export default function LandingView() {
             <CodeWindow style={{ flex: 1 }}>
               <div style={{ borderBottom: "1px solid #1e1e1e", padding: "8px 14px", display: "flex", alignItems: "center", gap: 10 }}>
                 <span className="mono" style={{ fontSize: 10, color: "#333" }}>RESPONSE</span>
-                <span className="mono" style={{ fontSize: 10, padding: "2px 8px", background: "rgba(0,200,83,0.08)", border: "1px solid rgba(0,200,83,0.18)", color: "#00C853" }}>200 SAFE</span>
+                <span className="mono" style={{ fontSize: 10, padding: "2px 8px", background: "#161616", border: "1px solid #2a2a2a", color: "#888" }}>200 SAFE</span>
               </div>
               <div className="code-body">
                 {RESPONSE.map((segs, i) => (
                   <div key={i} className="code-line mono" style={{ fontSize: 12 }}>
                     <span className="ln">{i + 1}</span>
-                    {segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def }}>{text}</span>)}
+                    {segs.map(([text, tok], j) => <span key={j} style={{ color: T[tok] || T.def, whiteSpace: "pre" }}>{text}</span>)}
                   </div>
                 ))}
               </div>
@@ -472,7 +472,7 @@ export default function LandingView() {
 
         {/* ── CTA ───────────────────────────────────────────────── */}
         <section style={{ maxWidth: 1040, margin: "0 auto", padding: "88px 32px 96px", textAlign: "center" }}>
-          <div className="mono" style={{ fontSize: 10, letterSpacing: "0.12em", color: "#00C853", marginBottom: 18 }}>
+          <div className="mono" style={{ fontSize: 10, letterSpacing: "0.12em", color: "#444", marginBottom: 18 }}>
             ● LIVE · SAFE AND MALICIOUS VERDICTS FULLY OPERATIONAL
           </div>
           <h2 style={{ fontSize: "clamp(1.8rem, 4vw, 3rem)", fontWeight: 600, letterSpacing: "-0.025em", marginBottom: 16 }}>
