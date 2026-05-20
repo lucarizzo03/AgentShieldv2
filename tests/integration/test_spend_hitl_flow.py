@@ -281,3 +281,105 @@ def test_malicious_spend_blocked() -> None:
     assert resp.status_code == 403
     assert resp.json()["status"] == "BLOCKED"
     app.dependency_overrides.clear()
+
+
+def test_suspicious_spend_pushes_verdict_callback_on_resolve(monkeypatch) -> None:
+    """When the spend request carries agent_callback_url, resolving the HITL
+    request schedules a signed verdict callback to the agent."""
+    _reset_db()
+    _seed_agent(per_txn_auto_approve_limit_cents=1000)
+    fake_redis = FakeRedis()
+    app.dependency_overrides[get_redis] = lambda: fake_redis
+    _mock_semantic("ALIGNED")
+
+    delivered: dict = {}
+
+    async def _fake_deliver(callback_url, body, secret, **kwargs):
+        delivered["url"] = callback_url
+        delivered["body"] = body
+        delivered["secret"] = secret
+        return True
+
+    monkeypatch.setattr("app.api.v1.routes.hitl.deliver_verdict_callback", _fake_deliver)
+
+    spend_body = {
+        "agent_id": "agent_demo",
+        "declared_goal": "Buy API credits for website launch",
+        "amount_cents": 5000,
+        "currency": "USD",
+        "asset_type": "STABLECOIN",
+        "stablecoin_symbol": "USDC",
+        "network": "base",
+        "destination_address": "0x1234567890abcdef",
+        "vendor_url_or_name": "tempo",
+        "item_description": "Agent credit top-up",
+        "agent_callback_url": "http://127.0.0.1:9099/agentshield/callback",
+    }
+    with TestClient(app) as client:
+        content, headers = _sign_agent(spend_body)
+        spend_resp = client.post("/v1/spend-request", content=content, headers=headers)
+        assert spend_resp.status_code == 202
+        request_id = spend_resp.json()["request_id"]
+
+        resolve_body = {"decision": "APPROVE", "resolver_id": "ops_user_1", "channel": "dashboard"}
+        r_content, r_headers = _sign_webhook(resolve_body, f"/v1/hitl/resolve/{request_id}")
+        resolve_resp = client.post(
+            f"/v1/hitl/resolve/{request_id}", content=r_content, headers=r_headers
+        )
+        assert resolve_resp.status_code == 200
+
+    # Background task runs after the response — verdict pushed to the agent,
+    # signed with the agent's own HMAC secret.
+    assert delivered["url"] == "http://127.0.0.1:9099/agentshield/callback"
+    assert delivered["secret"] == AGENT_SECRET
+    assert delivered["body"]["request_id"] == request_id
+    assert delivered["body"]["decision"] == "APPROVE"
+    assert delivered["body"]["status"] == "APPROVED_BY_HUMAN_EXECUTED"
+    assert delivered["body"]["verdict"] == "SAFE"
+    assert delivered["body"]["resolved"] is True
+    app.dependency_overrides.clear()
+
+
+def test_suspicious_spend_without_callback_url_skips_callback(monkeypatch) -> None:
+    """No agent_callback_url means no callback is attempted — polling-only path."""
+    _reset_db()
+    _seed_agent(per_txn_auto_approve_limit_cents=1000)
+    fake_redis = FakeRedis()
+    app.dependency_overrides[get_redis] = lambda: fake_redis
+    _mock_semantic("ALIGNED")
+
+    called = False
+
+    async def _fake_deliver(*args, **kwargs):
+        nonlocal called
+        called = True
+        return True
+
+    monkeypatch.setattr("app.api.v1.routes.hitl.deliver_verdict_callback", _fake_deliver)
+
+    spend_body = {
+        "agent_id": "agent_demo",
+        "declared_goal": "Buy API credits for website launch",
+        "amount_cents": 5000,
+        "currency": "USD",
+        "asset_type": "STABLECOIN",
+        "stablecoin_symbol": "USDC",
+        "network": "base",
+        "destination_address": "0x1234567890abcdef",
+        "vendor_url_or_name": "tempo",
+        "item_description": "Agent credit top-up",
+    }
+    with TestClient(app) as client:
+        content, headers = _sign_agent(spend_body)
+        spend_resp = client.post("/v1/spend-request", content=content, headers=headers)
+        request_id = spend_resp.json()["request_id"]
+
+        resolve_body = {"decision": "DENY", "resolver_id": "ops_user_1", "channel": "dashboard"}
+        r_content, r_headers = _sign_webhook(resolve_body, f"/v1/hitl/resolve/{request_id}")
+        resolve_resp = client.post(
+            f"/v1/hitl/resolve/{request_id}", content=r_content, headers=r_headers
+        )
+        assert resolve_resp.status_code == 200
+
+    assert called is False
+    app.dependency_overrides.clear()

@@ -45,7 +45,8 @@ result = client.spend_request(SpendRequest(
 if result.approved:
     execute_payment()
 elif result.pending_hitl:
-    # poll GET /v1/spend-request/{result.request_id}/status until resolved
+    # a human must review — pass agent_callback_url to get the verdict pushed
+    # to you, or poll GET /v1/spend-request/{result.request_id}/status
     pass
 ```
 
@@ -353,6 +354,8 @@ Submits a spend intent for evaluation.
 }
 ```
 
+On a `202`, the agent waits for the verdict. If `agent_callback_url` was supplied, AgentShield pushes the verdict to it when the human resolves the request; otherwise the agent polls `status_poll_url`. See [Human Review (HITL)](#human-review-hitl).
+
 `403` — MALICIOUS, blocked:
 ```json
 {
@@ -545,7 +548,35 @@ When a request is `SUSPICIOUS`, payment is paused and a human has to decide:
 4. `APPROVE` → agent is cleared to proceed, budget committed, logged as `APPROVED_BY_HUMAN_EXECUTED`
 5. `DENY` or timeout → logged as `DENIED_BY_HUMAN` or `EXPIRED`, no payment, no budget consumed
 
-The agent can poll `GET /v1/spend-request/{request_id}/status` to check whether a decision was made. The `202` response includes a ready-made `status_poll_url` and `poll_interval_seconds: 5`.
+### Receiving the verdict
+
+There are two ways for the agent to learn the outcome. **The webhook callback is the recommended path; polling is the fallback** for agents that can't expose a public endpoint.
+
+**1. Webhook callback (recommended).** Include `agent_callback_url` in the original spend request. The instant a human resolves the request, AgentShield `POST`s the verdict to that URL — no polling loop, no delay. The callback body matches the poll-status response so handler logic is identical either way:
+
+```json
+{
+  "request_id": "req_...",
+  "status": "APPROVED_BY_HUMAN_EXECUTED",
+  "verdict": "SAFE",
+  "decision": "APPROVE",
+  "resolved": true,
+  "resolved_at": "2026-05-20T12:00:00+00:00",
+  "delivery_id": "dlv_..."
+}
+```
+
+The callback is **signed with the agent's own HMAC secret** so the agent can verify it really came from AgentShield — verify it exactly like the inbound request signing scheme, using these headers:
+
+- `x-webhook-signature: sha256=<hmac>` — HMAC-SHA256 over `POST\n{path}\n{timestamp}\n{sha256(body)}`
+- `x-webhook-timestamp` — ISO-8601 timestamp included in the signed string
+- `x-delivery-id` — stable across retries; use it to dedupe
+
+Delivery is retried up to 3 times (over ~20s) on network errors or `5xx`; a `4xx` from the agent is treated as a permanent rejection and not retried. The agent should respond `2xx` once it has recorded the verdict. If every attempt fails, the verdict is still durable — fall back to polling.
+
+> SSRF protection: in non-`dev` environments the callback URL must resolve to a public address. In `dev`, loopback URLs are allowed so a locally-run test agent can receive callbacks.
+
+**2. Polling (fallback).** If no `agent_callback_url` is given — or the agent is behind a firewall and can't expose one — poll `GET /v1/spend-request/{request_id}/status`. The `202` response includes a ready-made `status_poll_url` and `poll_interval_seconds: 5`.
 
 ---
 

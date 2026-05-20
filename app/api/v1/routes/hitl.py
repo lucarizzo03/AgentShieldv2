@@ -1,13 +1,9 @@
 import hashlib
 import hmac as _hmac
-import ipaddress
 import logging
-import socket
 from datetime import datetime, timezone
-from urllib.parse import urlparse
 
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
 from redis.asyncio import Redis
 from sqlmodel import select
@@ -22,11 +18,13 @@ from app.core.metrics import increment
 from app.core.security import verify_hitl_auth
 from app.db.postgres import get_session
 from app.db.redis import get_redis
+from app.models.agent import Agent
 from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
 from app.policy.checks.quantitative import commit_budget_spend
 from app.services.activity_log import append_agent_activity
+from app.services.hitl.callback import build_callback_body, deliver_verdict_callback
 from app.services.hitl.state_manager import apply_resolution, ensure_pending_is_resolvable
 
 
@@ -71,33 +69,6 @@ def _email_error_page(message: str) -> str:
 </body>
 </html>"""
 
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("0.0.0.0/8"),
-    ipaddress.ip_network("100.64.0.0/10"),
-]
-
-
-def _is_ssrf_blocked(url: str) -> bool:
-    try:
-        hostname = urlparse(url).hostname
-        if not hostname:
-            return True
-        for _family, _type, _proto, _canonname, sockaddr in socket.getaddrinfo(hostname, None):
-            ip = ipaddress.ip_address(sockaddr[0])
-            if any(ip in net for net in _BLOCKED_NETWORKS):
-                return True
-        return False
-    except Exception:
-        return True
-
-
 router = APIRouter(tags=["hitl"])
 
 
@@ -107,6 +78,7 @@ async def _resolve_pending(
     payload: HitlResolveRequest,
     session: AsyncSession,
     redis: Redis,
+    background_tasks: BackgroundTasks,
 ):
     pending = (await session.exec(
         select(PendingSpend).where(PendingSpend.request_id == request_id).with_for_update()
@@ -206,24 +178,24 @@ async def _resolve_pending(
                 exc_info=True,
             )
 
+    # Push the verdict to the agent's callback URL (signed + retried) so it
+    # doesn't have to poll. Runs after the response is sent; polling stays as
+    # the fallback if the agent has no callback URL or delivery fails.
     callback_url = pending.payload_json.get("agent_callback_url")
     if callback_url:
-        if _is_ssrf_blocked(callback_url):
-            logger.warning("HITL callback blocked (SSRF)", extra={"request_id": request_id, "url": callback_url})
+        agent = (await session.exec(
+            select(Agent).where(Agent.agent_id == pending.agent_id)
+        )).first()
+        if agent and agent.hmac_secret:
+            callback_body = build_callback_body(request_id, payload.decision, pending.resolved_at)
+            background_tasks.add_task(
+                deliver_verdict_callback, callback_url, callback_body, agent.hmac_secret
+            )
         else:
-            callback_body = {
-                "request_id": request_id,
-                "decision": payload.decision,
-                "status": "APPROVED_BY_HUMAN_EXECUTED" if payload.decision == "APPROVE" else "DENIED_BY_HUMAN",
-                "verdict": "SAFE" if payload.decision == "APPROVE" else "MALICIOUS",
-                "resolved_at": pending.resolved_at.isoformat() if pending.resolved_at else None,
-            }
-            try:
-                async with httpx.AsyncClient() as client:
-                    await client.post(callback_url, json=callback_body, timeout=10)
-                logger.info("HITL callback delivered", extra={"request_id": request_id, "url": callback_url})
-            except Exception as exc:
-                logger.warning("HITL callback failed", extra={"request_id": request_id, "url": callback_url, "error": str(exc)})
+            logger.warning(
+                "HITL callback skipped — agent has no HMAC secret to sign with",
+                extra={"request_id": request_id, "agent_id": pending.agent_id},
+            )
 
     return {
         "request_id": request_id,
@@ -237,11 +209,18 @@ async def _resolve_pending(
 async def resolve_hitl_request(
     request_id: str,
     payload: HitlResolveRequest,
+    background_tasks: BackgroundTasks,
     _: None = Depends(verify_hitl_auth),
     session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
-    return await _resolve_pending(request_id=request_id, payload=payload, session=session, redis=redis)
+    return await _resolve_pending(
+        request_id=request_id,
+        payload=payload,
+        session=session,
+        redis=redis,
+        background_tasks=background_tasks,
+    )
 
 
 
@@ -250,6 +229,7 @@ async def email_resolve(
     request_id: str,
     decision: str,
     token: str,
+    background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
@@ -268,7 +248,13 @@ async def email_resolve(
 
     payload = HitlResolveRequest(decision=decision, resolver_id="email-link", channel="email")
     try:
-        await _resolve_pending(request_id=request_id, payload=payload, session=session, redis=redis)
+        await _resolve_pending(
+            request_id=request_id,
+            payload=payload,
+            session=session,
+            redis=redis,
+            background_tasks=background_tasks,
+        )
     except HTTPException as exc:
         msg = "This request has already been resolved." if exc.status_code == 409 else exc.detail
         return HTMLResponse(_email_error_page(msg), status_code=exc.status_code)
