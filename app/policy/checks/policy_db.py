@@ -100,7 +100,7 @@ def run_policy_checks(
     )
     amount_over_threshold = amount_cents > threshold
     if amount_over_threshold:
-        check.suspicious = True
+        check.hard_deny = True
         check.reasons.append("AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD")
     else:
         check.reasons.append("AMOUNT_WITHIN_AUTO_APPROVAL_THRESHOLD")
@@ -117,14 +117,14 @@ def run_policy_checks(
         blocked = {_normalize_addr(a) for a in agent.blocked_destination_addresses}
         allowed = {_normalize_addr(a) for a in agent.allowed_destination_addresses}
         if not address:
-            check.suspicious = True
+            check.hard_deny = True
             check.reasons.append("DESTINATION_ADDRESS_MISSING")
         else:
             if address in blocked:
                 check.hard_deny = True
                 check.reasons.append("DESTINATION_DENYLISTED")
             if allowed and address not in allowed:
-                check.suspicious = True
+                check.hard_deny = True
                 check.reasons.append("DESTINATION_NOT_ALLOWLISTED")
         stablecoin_context = {
             "asset_type": asset_type,

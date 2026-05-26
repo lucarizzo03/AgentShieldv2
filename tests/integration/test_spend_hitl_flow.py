@@ -205,15 +205,15 @@ def test_safe_spend_request_approved() -> None:
 
 def test_suspicious_spend_goes_to_hitl_and_approves() -> None:
     _reset_db()
-    _seed_agent(per_txn_auto_approve_limit_cents=1000)
+    _seed_agent()
     fake_redis = FakeRedis()
     app.dependency_overrides[get_redis] = lambda: fake_redis
-    _mock_semantic("ALIGNED")
+    _mock_semantic("WEAK", 40)
 
     spend_body = {
         "agent_id": "agent_demo",
         "declared_goal": "Buy API credits for website launch",
-        "amount_cents": 5000,
+        "amount_cents": 1200,
         "currency": "USD",
         "asset_type": "STABLECOIN",
         "stablecoin_symbol": "USDC",
@@ -287,10 +287,10 @@ def test_suspicious_spend_pushes_verdict_callback_on_resolve(monkeypatch) -> Non
     """When the spend request carries agent_callback_url, resolving the HITL
     request schedules a signed verdict callback to the agent."""
     _reset_db()
-    _seed_agent(per_txn_auto_approve_limit_cents=1000)
+    _seed_agent()
     fake_redis = FakeRedis()
     app.dependency_overrides[get_redis] = lambda: fake_redis
-    _mock_semantic("ALIGNED")
+    _mock_semantic("WEAK", 40)
 
     delivered: dict = {}
 
@@ -305,7 +305,7 @@ def test_suspicious_spend_pushes_verdict_callback_on_resolve(monkeypatch) -> Non
     spend_body = {
         "agent_id": "agent_demo",
         "declared_goal": "Buy API credits for website launch",
-        "amount_cents": 5000,
+        "amount_cents": 1200,
         "currency": "USD",
         "asset_type": "STABLECOIN",
         "stablecoin_symbol": "USDC",
@@ -343,10 +343,10 @@ def test_suspicious_spend_pushes_verdict_callback_on_resolve(monkeypatch) -> Non
 def test_suspicious_spend_without_callback_url_skips_callback(monkeypatch) -> None:
     """No agent_callback_url means no callback is attempted — polling-only path."""
     _reset_db()
-    _seed_agent(per_txn_auto_approve_limit_cents=1000)
+    _seed_agent()
     fake_redis = FakeRedis()
     app.dependency_overrides[get_redis] = lambda: fake_redis
-    _mock_semantic("ALIGNED")
+    _mock_semantic("WEAK", 40)
 
     called = False
 
@@ -360,7 +360,7 @@ def test_suspicious_spend_without_callback_url_skips_callback(monkeypatch) -> No
     spend_body = {
         "agent_id": "agent_demo",
         "declared_goal": "Buy API credits for website launch",
-        "amount_cents": 5000,
+        "amount_cents": 1200,
         "currency": "USD",
         "asset_type": "STABLECOIN",
         "stablecoin_symbol": "USDC",

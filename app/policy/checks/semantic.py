@@ -1,6 +1,12 @@
-from app.core.config import get_settings
 from app.policy.verdicts import CheckResult
 from app.services.slm.client import AnthropicSemanticClient
+
+# Thresholds operate on the 0-100 normalized score (higher = more aligned = safer).
+# >= 75  → ALIGNED  → safe
+# 45-75  → WEAK     → suspicious (HITL)
+# <= 45  → MISMATCH → hard block
+_SAFE_THRESHOLD = 75
+_BLOCK_THRESHOLD = 45
 
 
 async def run_semantic_checks(
@@ -23,39 +29,36 @@ async def run_semantic_checks(
         destination_address=destination_address,
     )
 
-    raw_label = result.get("alignment_label")
     _score_raw = result.get("risk_score") or 0
     _score_float = float(_score_raw)
     # Claude occasionally returns a 0–1 decimal instead of 0–100 integer.
     # Values strictly between 0 and 1 are treated as fractional and scaled up.
-    raw_score = int(round(_score_float * 100)) if 0 < _score_float < 1 else int(_score_float)
-    alignment_label = str(raw_label).upper() if raw_label is not None else "WEAK"
+    risk_score = int(round(_score_float * 100)) if 0 < _score_float < 1 else int(_score_float)
+    # Claude returns a risk score (0=safe, 100=dangerous). Invert to an
+    # alignment score (100=safe, 0=dangerous) so thresholds read naturally.
+    raw_score = 100 - risk_score
     reason_codes = list(result.get("reason_codes", []))
 
-    if raw_score >= 85 or alignment_label not in ("ALIGNED", "WEAK"):
-        alignment_label = "MISMATCH"
-        risk_score = 85
-    elif alignment_label == "ALIGNED":
-        risk_score = 10
+    if raw_score >= _SAFE_THRESHOLD:
+        alignment_label = "ALIGNED"
+    elif raw_score > _BLOCK_THRESHOLD:
+        alignment_label = "WEAK"
     else:
-        risk_score = 55
+        alignment_label = "MISMATCH"
 
-    settings = get_settings()
     check = CheckResult()
     if alignment_label == "MISMATCH":
-        # Semantic mismatch is ambiguous by policy and should route to HITL.
-        check.suspicious = True
+        check.hard_deny = True
         check.reasons.append("SEMANTIC_MISMATCH_HIGH")
     elif alignment_label == "WEAK":
+        check.suspicious = True
         check.reasons.append("SEMANTIC_ALIGNMENT_WEAK")
-        if raw_score >= settings.semantic_weak_suspicious_min_score:
-            check.suspicious = True
     else:
         check.reasons.append("SEMANTIC_ALIGNMENT_HIGH")
 
     check.context = {
         "alignment_label": alignment_label,
-        "risk_score": risk_score,
+        "risk_score": raw_score,
         "raw_risk_score": raw_score,
         "reason_codes": reason_codes,
     }
