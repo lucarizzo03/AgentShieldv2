@@ -64,7 +64,7 @@ Every spend request goes through four checks. Each check looks at a different di
 | **D — Goal Drift** | Claude Haiku | Is this purchase within what the agent is supposed to be doing at all? |
 
 Checks A and B run sequentially — if either hard-denies, C and D are skipped entirely (no Claude API call). C and D run in parallel only when A and B both pass. Results are combined into one verdict:
-- Any check returns a hard block → `MALICIOUS`
+- Any check returns a hard block → `MALICIOUS` (checks A, B, and C can all hard block)
 - Any check raises a concern → `SUSPICIOUS` (goes to human review)
 - All checks pass → `SAFE`
 
@@ -115,7 +115,7 @@ Check A generates a SHA256 hash of the transaction details (vendor, amount, item
 The agent's blocked vendors, amount limits, and stablecoin rules are all stored directly on the `Agent` row in Postgres. Check B just reads that one row — no joins, no extra tables. These rules don't change often, and keeping them on the agent record means the logic is simple and there's no risk of policies being out of sync.
 
 **What happens if the Claude API is down during Check C?**
-It fails safe. The check returns `WEAK` with a score of 55, which routes the request to human review (`SUSPICIOUS`) rather than auto-approving or hard-blocking. The agent never gets blocked just because an external API had downtime — a human reviews it instead.
+It fails safe. The check returns `WEAK` with an alignment score of 45 (middle of the suspicious band), which routes the request to human review (`SUSPICIOUS`) rather than auto-approving or hard-blocking. The agent never gets blocked just because an external API had downtime — a human reviews it instead.
 
 **What happens if the Claude API is down during Check D?**
 Check D fails **suspicious** — not open. Any exception from the API results in `GOAL_DRIFT_EVAL_UNAVAILABLE`, which routes the request to human review (`SUSPICIOUS`). This is intentional: goal-drift evaluation is considered load-bearing when `allowed_scopes` are configured, so an outage goes to HITL rather than being silently skipped.
@@ -136,7 +136,7 @@ An API key proves who you are but doesn't prove your message wasn't tampered wit
 |---|---|
 | Agent tries to pay a blocked vendor | Check B: hostname/domain blocklist |
 | Agent tries to pay a lookalike phishing domain | Check B: phishing domain pattern detection |
-| Agent pays a vendor that doesn't match its stated goal | Check C: semantic alignment scoring |
+| Agent pays a vendor that clearly doesn't match its stated goal | Check C: semantic alignment scoring — hard blocks on clear mismatch, routes to HITL on weak alignment |
 | Agent's goal is outside what it's supposed to do (e.g., flight-booking agent told to buy crypto) | Check D: allowed scopes comparison |
 | Agent sends the same transaction in a loop | Check A: fingerprint counter with expiry window |
 | Agent tries to exceed its daily budget | Check A: atomic budget check |
@@ -178,7 +178,7 @@ The model is told to output *only* a JSON object with exactly specified keys. Fr
 The response is parsed with `re.search(r"\{.*\}", raw, re.DOTALL)` — only the JSON object is extracted. If the model returns anything that doesn't contain the expected keys (`alignment_label` for Check C, `within_scope` for Check D), the result is treated as `WEAK` (suspicious) rather than trusted.
 
 **7. Fail-safe fallback direction**
-Any unexpected or unparseable response defaults to `WEAK / risk_score=55`, which routes to human review. A successful injection would need to produce a well-formed JSON object with `alignment_label: "ALIGNED"` and a low risk score — not just break the prompt. Injections that cause garbled output or refusals go to HITL, not auto-approve.
+Any unexpected or unparseable response defaults to alignment score 55 (`WEAK`), which routes to human review. A successful injection would need to produce a well-formed JSON object with a high risk score (translating to alignment ≥ 75) — not just break the prompt. Injections that cause garbled output or refusals go to HITL, not auto-approve.
 
 **Residual risk**
 These defenses raise the bar significantly but do not eliminate the risk. A sufficiently sophisticated injection that produces a valid-looking JSON response with the right keys could still fool Check C or D. This is acknowledged in the threat model above — human review (HITL) is the backstop for cases where the LLM is fooled.
@@ -406,7 +406,7 @@ Update the allowed scopes used by Check D (goal-drift detection). Requires dashb
 }
 ```
 
-When `allowed_scopes` is non-empty, every incoming spend request's `declared_goal` is evaluated against these scopes by Claude Haiku. Goals outside the defined scopes trigger a `SUSPICIOUS` verdict. When the list is empty, Check D skips entirely.
+When `allowed_scopes` is non-empty, every incoming spend request's `declared_goal` is evaluated against these scopes by Claude Haiku. Goals outside the defined scopes trigger a `SUSPICIOUS` verdict and route to human review. When the list is empty, Check D skips entirely.
 
 ---
 
@@ -501,7 +501,7 @@ Stablecoin rules:
 
 ### Check C — Semantic (Claude Haiku)
 
-Sends `declared_goal`, `amount_cents`, `vendor`, `item`, `stablecoin_symbol`, `network` to Claude. Returns:
+Sends `declared_goal`, `amount_cents`, `vendor`, `item`, `stablecoin_symbol`, `network` to Claude. Claude returns a `risk_score` (0 = no risk, 100 = extreme risk) which is inverted internally to an alignment score (100 = fully aligned, 0 = complete mismatch) before thresholds are applied.
 
 ```json
 {
@@ -511,13 +511,17 @@ Sends `declared_goal`, `amount_cents`, `vendor`, `item`, `stablecoin_symbol`, `n
 }
 ```
 
-Verdict mapping:
-- `MISMATCH`, or `raw_score >= 85` (treated as MISMATCH) → **suspicious** (HITL)
-- `WEAK` with `raw_score >= 50` (configurable via `SEMANTIC_WEAK_SUSPICIOUS_MIN_SCORE`) → suspicious
-- `WEAK` with `raw_score < 50` → pass
-- `ALIGNED` → pass
+Alignment score thresholds (after inverting Claude's risk score):
 
-If the Anthropic API is unavailable, falls back to `WEAK / risk_score=55` — routes to human review, never hard blocks.
+| Alignment score | Label | Verdict |
+|---|---|---|
+| ≥ 75 | ALIGNED | Pass — safe |
+| 46 – 74 | WEAK | Suspicious → HITL |
+| ≤ 45 | MISMATCH | **Hard block → MALICIOUS** |
+
+Unlike checks A and B which hard block on policy violations, Check C is the only AI check that can hard block — but only when alignment is clearly low (score ≤ 45). Weak alignment routes to human review rather than blocking outright.
+
+If the Anthropic API is unavailable, falls back to alignment score 55 (`WEAK`) — routes to human review, never hard blocks on API failure.
 
 ### Check D — Goal Drift (Claude Haiku)
 
