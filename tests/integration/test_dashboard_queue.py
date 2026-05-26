@@ -75,12 +75,12 @@ def test_dashboard_notification_list_and_ack() -> None:
     fake_redis = FakeRedis()
     app.dependency_overrides[get_redis] = lambda: fake_redis
     app.dependency_overrides[verify_user_auth] = _mock_user_auth
-    _mock_semantic("WEAK", 60)
+    _mock_semantic("WEAK", 40)
 
     spend_body = {
         "agent_id": "agent_dash",
         "declared_goal": "Purchase required service",
-        "amount_cents": 5000,
+        "amount_cents": 500,
         "currency": "USD",
         "asset_type": "STABLECOIN",
         "stablecoin_symbol": "USDC",

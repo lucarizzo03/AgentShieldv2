@@ -81,10 +81,10 @@ def _kwargs(**overrides) -> dict:
 
 @pytest.mark.asyncio
 async def test_engine_safe_verdict(redis, semantic) -> None:
-    agent = _agent("e2e-safe-01")
+    agent = _agent("e2e-safe-01", per_txn_auto_approve_limit_cents=100_000, daily_budget_limit_cents=100_000_000)
     result = await run_financial_triangulation(
         redis=redis, semantic_client=semantic, agent=agent,
-        **_kwargs(),
+        **_kwargs(amount_cents=25000),
     )
     assert result.verdict == "SAFE"
     assert "BUDGET_WITHIN_LIMIT" in result.reasons
@@ -116,11 +116,11 @@ async def test_engine_quant_budget_exceeded_hard_deny(redis, semantic) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Quantitative — loop pattern (suspicious, semantic still runs)
+# Quantitative — loop pattern (hard deny, semantic skipped)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_engine_loop_pattern_suspicious(redis, semantic) -> None:
+async def test_engine_loop_pattern_hard_deny(redis, semantic) -> None:
     agent = _agent("e2e-loop-01")
     fp = transaction_fingerprint(
         vendor="loop-vendor.com", amount_cents=500,
@@ -134,19 +134,19 @@ async def test_engine_loop_pattern_suspicious(redis, semantic) -> None:
         redis=redis, semantic_client=semantic, agent=agent,
         **_kwargs(vendor_url_or_name="loop-vendor.com", fingerprint=fp),
     )
-    assert result.verdict == "SUSPICIOUS"
+    assert result.verdict == "MALICIOUS"
     assert "LOOP_PATTERN_DETECTED" in result.reasons
-    assert result.semantic_result != {}
+    assert result.semantic_result == {}
 
     await redis.delete(loop_key)
 
 
 # ---------------------------------------------------------------------------
-# Quantitative — destination burst (suspicious, semantic still runs)
+# Quantitative — destination burst (hard deny, semantic skipped)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_engine_destination_burst_suspicious(redis, semantic) -> None:
+async def test_engine_destination_burst_hard_deny(redis, semantic) -> None:
     agent = _agent("e2e-burst-01", allowed_stablecoins=["USDC"], allowed_networks=["base"])
     burst_key = f"dest:burst:{agent.agent_id}:base:0xburst000"
     await redis.set(burst_key, 4, ex=60)
@@ -164,9 +164,9 @@ async def test_engine_destination_burst_suspicious(redis, semantic) -> None:
             fingerprint=fp,
         ),
     )
-    assert result.verdict == "SUSPICIOUS"
+    assert result.verdict == "MALICIOUS"
     assert "DESTINATION_BURST_DETECTED" in result.reasons
-    assert result.semantic_result != {}
+    assert result.semantic_result == {}
 
     await redis.delete(burst_key)
 
@@ -285,27 +285,27 @@ async def test_engine_policy_destination_denylisted_hard_deny(redis, semantic) -
 
 
 # ---------------------------------------------------------------------------
-# Policy — amount over threshold (suspicious, semantic still runs)
+# Policy — amount over threshold (hard deny, semantic skipped)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_engine_policy_amount_over_threshold_suspicious(redis, semantic) -> None:
+async def test_engine_policy_amount_over_threshold_hard_deny(redis, semantic) -> None:
     agent = _agent("e2e-thresh-01", per_txn_auto_approve_limit_cents=100)
     result = await run_financial_triangulation(
         redis=redis, semantic_client=semantic, agent=agent,
         **_kwargs(amount_cents=200),
     )
-    assert result.verdict == "SUSPICIOUS"
+    assert result.verdict == "MALICIOUS"
     assert "AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD" in result.reasons
-    assert result.semantic_result != {}
+    assert result.semantic_result == {}
 
 
 # ---------------------------------------------------------------------------
-# Policy — destination not allowlisted (suspicious, semantic still runs)
+# Policy — destination not allowlisted (hard deny, semantic skipped)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_engine_policy_destination_not_allowlisted_suspicious(redis, semantic) -> None:
+async def test_engine_policy_destination_not_allowlisted_hard_deny(redis, semantic) -> None:
     agent = _agent(
         "e2e-allowlist-01",
         allowed_stablecoins=["USDC"], allowed_networks=["base"],
@@ -324,9 +324,9 @@ async def test_engine_policy_destination_not_allowlisted_suspicious(redis, seman
             fingerprint=fp,
         ),
     )
-    assert result.verdict == "SUSPICIOUS"
+    assert result.verdict == "MALICIOUS"
     assert "DESTINATION_NOT_ALLOWLISTED" in result.reasons
-    assert result.semantic_result != {}
+    assert result.semantic_result == {}
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +344,7 @@ async def test_engine_semantic_mismatch_suspicious(redis, semantic) -> None:
             item_description="Token purchase",
         ),
     )
-    assert result.verdict == "SUSPICIOUS"
+    assert result.verdict == "MALICIOUS"
     assert "SEMANTIC_MISMATCH_HIGH" in result.reasons
 
 
@@ -374,10 +374,16 @@ async def test_engine_semantic_aligned_safe(redis, semantic) -> None:
 
 @pytest.mark.asyncio
 async def test_engine_goal_drift_detected_suspicious(redis, semantic) -> None:
-    agent = _agent("e2e-drift-01", allowed_scopes=["travel bookings"])
+    # Semantically aligned (goal/vendor/item all match) but outside allowed scopes.
+    agent = _agent("e2e-drift-01", allowed_scopes=["travel bookings"], per_txn_auto_approve_limit_cents=100_000, daily_budget_limit_cents=100_000_000)
     result = await run_financial_triangulation(
         redis=redis, semantic_client=semantic, agent=agent,
-        **_kwargs(declared_goal="Buy crypto on exchange"),
+        **_kwargs(
+            declared_goal="Purchase ETH on crypto exchange",
+            vendor_url_or_name="coinbase.com",
+            item_description="1 ETH purchase",
+            amount_cents=25000,
+        ),
     )
     assert result.verdict == "SUSPICIOUS"
     assert "GOAL_DRIFT_DETECTED" in result.reasons
@@ -403,13 +409,14 @@ async def test_engine_goal_drift_skipped_no_scopes(redis, semantic) -> None:
 
 @pytest.mark.asyncio
 async def test_engine_goal_within_scope_safe(redis, semantic) -> None:
-    agent = _agent("e2e-drift-safe-01", allowed_scopes=["travel bookings"])
+    agent = _agent("e2e-drift-safe-01", allowed_scopes=["travel bookings"], per_txn_auto_approve_limit_cents=100_000, daily_budget_limit_cents=100_000_000)
     result = await run_financial_triangulation(
         redis=redis, semantic_client=semantic, agent=agent,
         **_kwargs(
             declared_goal="Book flight JFK to LAX",
             vendor_url_or_name="delta.com",
             item_description="Economy seat JFK-LAX",
+            amount_cents=25000,
         ),
     )
     assert result.verdict == "SAFE"

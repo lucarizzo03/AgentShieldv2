@@ -388,13 +388,13 @@ class TestSuspiciousHitlPath:
         _seed_agent()
         self.redis = FakeRedis()
         app.dependency_overrides[get_redis] = lambda: self.redis
-        _mock_semantic("WEAK", 60)
+        _mock_semantic("WEAK", 40)
 
     def teardown_method(self):
         app.dependency_overrides.clear()
 
-    def _over_threshold_spend(self, client, idempotency_key="susp-001"):
-        body = {**_STABLECOIN, "amount_cents": 8_000, "idempotency_key": idempotency_key}
+    def _semantic_suspicious_spend(self, client, idempotency_key="susp-001"):
+        body = {**_STABLECOIN, "amount_cents": 2_000, "idempotency_key": idempotency_key}
         content, headers = _sign_agent(body)
         return client.post("/v1/spend-request", content=content, headers=headers)
 
@@ -428,14 +428,14 @@ class TestSuspiciousHitlPath:
 
     def test_suspicious_returns_202_with_correct_state(self):
         with TestClient(app) as client:
-            resp = self._over_threshold_spend(client)
+            resp = self._semantic_suspicious_spend(client)
 
         assert resp.status_code == 202, resp.text
         body = resp.json()
         assert body["status"] == "PENDING_HITL"
         assert body["verdict"] == "SUSPICIOUS"
         assert body["next_action"] == "AGENT_MUST_WAIT"
-        assert "AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD" in body["reasons"]
+        assert "SEMANTIC_ALIGNMENT_WEAK" in body["reasons"]
         assert "agent_feedback" in body
         assert body["agent_feedback"]["verdict_summary"]["human_review_required"] is True
 
@@ -462,7 +462,7 @@ class TestSuspiciousHitlPath:
 
     def test_approve_transitions_all_records(self):
         with TestClient(app) as client:
-            spend = self._over_threshold_spend(client)
+            spend = self._semantic_suspicious_spend(client)
             assert spend.status_code == 202
             request_id = spend.json()["request_id"]
 
@@ -492,7 +492,7 @@ class TestSuspiciousHitlPath:
 
     def test_deny_records_denial(self):
         with TestClient(app) as client:
-            spend = self._over_threshold_spend(client, idempotency_key="susp-deny-001")
+            spend = self._semantic_suspicious_spend(client, idempotency_key="susp-deny-001")
             assert spend.status_code == 202
             request_id = spend.json()["request_id"]
 
@@ -516,7 +516,7 @@ class TestSuspiciousHitlPath:
 
     def test_double_resolve_returns_409(self):
         with TestClient(app) as client:
-            spend = self._over_threshold_spend(client, idempotency_key="susp-dbl-001")
+            spend = self._semantic_suspicious_spend(client, idempotency_key="susp-dbl-001")
             request_id = spend.json()["request_id"]
             resolve_body = {"decision": "APPROVE", "resolver_id": "ops_user_1", "channel": "dashboard"}
 
@@ -625,27 +625,22 @@ class TestSemanticMismatchHitlPath:
     def teardown_method(self):
         app.dependency_overrides.clear()
 
-    def test_semantic_mismatch_routes_to_hitl(self):
-        payload = {**_STABLECOIN, "idempotency_key": "sem-mismatch-hitl-001"}
+    def test_semantic_mismatch_hard_blocks(self):
+        payload = {**_STABLECOIN, "idempotency_key": "sem-mismatch-block-001"}
         content, headers = _sign_agent(payload)
         with TestClient(app) as client:
             resp = client.post("/v1/spend-request", content=content, headers=headers)
 
-        assert resp.status_code == 202, resp.text
+        assert resp.status_code == 403, resp.text
         body = resp.json()
-        assert body["status"] == "PENDING_HITL"
-        assert body["verdict"] == "SUSPICIOUS"
+        assert body["status"] == "BLOCKED"
+        assert body["verdict"] == "MALICIOUS"
         assert "SEMANTIC_MISMATCH_HIGH" in body["reasons"]
 
         with Session(engine) as session:
             audit = session.exec(
                 select(SpendAuditLog).where(SpendAuditLog.request_id == body["request_id"])
             ).first()
-            notif = session.exec(
-                select(DashboardNotification).where(DashboardNotification.request_id == body["request_id"])
-            ).first()
         assert audit is not None
-        assert audit.status == "PENDING_HITL"
-        assert audit.verdict == "SUSPICIOUS"
-        assert notif is not None
-        assert notif.status == "OPEN"
+        assert audit.status == "BLOCKED"
+        assert audit.verdict == "MALICIOUS"

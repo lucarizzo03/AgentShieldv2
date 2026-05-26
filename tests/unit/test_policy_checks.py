@@ -80,7 +80,7 @@ def test_policy_vendor_url_path_word_does_not_trigger_blocklist() -> None:
     assert "VENDOR_ALLOWED" in result.reasons
 
 
-def test_stablecoin_destination_not_allowlisted_is_suspicious() -> None:
+def test_stablecoin_destination_not_allowlisted_is_hard_denied() -> None:
     agent = _agent()
     result = run_policy_checks(
         agent=agent,
@@ -91,11 +91,11 @@ def test_stablecoin_destination_not_allowlisted_is_suspicious() -> None:
         network="base",
         destination_address="0x1111111111111111",
     )
-    assert result.suspicious is True
+    assert result.hard_deny is True
     assert "DESTINATION_NOT_ALLOWLISTED" in result.reasons
 
 
-def test_stablecoin_missing_destination_is_suspicious() -> None:
+def test_stablecoin_missing_destination_is_hard_denied() -> None:
     agent = _agent()
     result = run_policy_checks(
         agent=agent,
@@ -106,11 +106,11 @@ def test_stablecoin_missing_destination_is_suspicious() -> None:
         network="base",
         destination_address=None,
     )
-    assert result.suspicious is True
+    assert result.hard_deny is True
     assert "DESTINATION_ADDRESS_MISSING" in result.reasons
 
 
-def test_stablecoin_missing_destination_for_locus_mpp_vendor_is_suspicious() -> None:
+def test_stablecoin_missing_destination_for_locus_mpp_vendor_is_hard_denied() -> None:
     agent = _agent()
     result = run_policy_checks(
         agent=agent,
@@ -121,7 +121,7 @@ def test_stablecoin_missing_destination_for_locus_mpp_vendor_is_suspicious() -> 
         network="base",
         destination_address=None,
     )
-    assert result.suspicious is True
+    assert result.hard_deny is True
     assert "DESTINATION_ADDRESS_MISSING" in result.reasons
 
 

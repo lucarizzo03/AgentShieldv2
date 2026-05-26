@@ -107,7 +107,7 @@ async def run_quantitative_checks(
     if not budget_exceeded:
         loop_count = await redis.eval(_INCR_WITH_TTL, 1, loop_key, settings.loop_window_seconds)
         if loop_count >= settings.loop_threshold:
-            check.suspicious = True
+            check.hard_deny = True
             check.reasons.append("LOOP_PATTERN_DETECTED")
         else:
             check.reasons.append("NO_LOOP_PATTERN")
@@ -115,7 +115,7 @@ async def run_quantitative_checks(
         if burst_key:
             destination_burst = await redis.eval(_INCR_WITH_TTL, 1, burst_key, settings.loop_window_seconds)
             if destination_burst >= settings.loop_threshold:
-                check.suspicious = True
+                check.hard_deny = True
                 check.reasons.append("DESTINATION_BURST_DETECTED")
 
     check.context = {
