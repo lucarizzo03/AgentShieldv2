@@ -134,7 +134,6 @@ class AnthropicSemanticClient:
             msg = await self._client.messages.create(
                 model=self._model,
                 max_tokens=256,
-                temperature=0,
                 system=[
                     {
                         "type": "text",
@@ -183,7 +182,6 @@ class AnthropicSemanticClient:
             msg = await self._client.messages.create(
                 model=self._model,
                 max_tokens=128,
-                temperature=0,
                 system=[
                     {
                         "type": "text",
