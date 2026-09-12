@@ -17,6 +17,7 @@ from app.api.v1.schemas.agent import (
 from app.core.security import AuthContext, UserAuthContext, verify_agent_auth, verify_user_auth
 from app.db.postgres import get_session
 from app.models.agent import Agent
+from app.models.user import User
 from app.services.activity_log import append_agent_activity
 from app.services.user_identity import get_or_create_user
 
@@ -191,12 +192,25 @@ async def rotate_agent_hmac(
     auth: AuthContext = Depends(verify_agent_auth),
     session: AsyncSession = Depends(get_session),
 ):
-    if auth.agent_id != agent_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cannot rotate another agent's credentials")
-    # Rotation stays agent-authenticated, not user-authenticated.
     agent = (await session.exec(select(Agent).where(Agent.agent_id == agent_id))).first()
     if not agent:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+
+    if auth.method == "hmac":
+        # The agent proved ownership of the current secret by signing this request.
+        if auth.principal_id != agent_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot rotate another agent's credentials",
+            )
+    else:
+        # Auth0 principals must own the agent; x-agent-id is not an authorization claim.
+        user = (await session.exec(select(User).where(User.auth_subject == auth.principal_id))).first()
+        if not user or agent.owner_user_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot rotate another agent's credentials",
+            )
 
     now = datetime.now(timezone.utc)
     agent.hmac_secret = f"sk_live_{token_urlsafe(18)}"
