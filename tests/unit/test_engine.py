@@ -290,10 +290,10 @@ async def test_engine_policy_destination_denylisted_hard_deny(redis, semantic) -
 
 @pytest.mark.asyncio
 async def test_engine_policy_amount_over_threshold_escalates(redis, semantic) -> None:
-    agent = _agent("e2e-thresh-01", per_txn_auto_approve_limit_cents=100)
+    agent = _agent("e2e-thresh-01", per_txn_auto_approve_limit_cents=10_000)
     result = await run_financial_triangulation(
         redis=redis, semantic_client=semantic, agent=agent,
-        **_kwargs(amount_cents=200),
+        **_kwargs(amount_cents=20_000),
     )
     assert result.verdict == "SUSPICIOUS"
     assert "AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD" in result.reasons
