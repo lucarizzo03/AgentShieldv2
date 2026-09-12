@@ -57,6 +57,14 @@ class FakeRedis:
         keys = list(args[:numkeys])
         argv = list(args[numkeys:])
         key = keys[0]
+        if "DECRBY" in script:
+            # _RELEASE_BUDGET_RESERVATION: argv = [amount_cents]
+            if key not in self._values:
+                return 0
+            new_val = max(0, int(self._values[key]) - int(argv[0]))
+            self._counter[key] = new_val
+            self._values[key] = str(new_val)
+            return 1
         if len(argv) == 3:
             # _CHECK_AND_RESERVE_BUDGET: argv = [amount_cents, limit_cents, ttl_seconds]
             amount = int(argv[0])
