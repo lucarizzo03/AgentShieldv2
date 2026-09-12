@@ -11,7 +11,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.api.v1.schemas.spend import HitlChannel, SpendRequest
 from app.core.config import get_settings
 from app.core.metrics import increment
-from app.core.security import AuthContext, verify_agent_auth
+from app.core.security import AuthContext, ensure_agent_access, verify_agent_auth
 from app.db.postgres import get_session
 from app.db.redis import get_redis
 from app.models.agent import Agent
@@ -183,11 +183,7 @@ async def spend_request(
     session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
-    if auth_context.agent_id and auth_context.agent_id != payload.agent_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Authenticated agent_id does not match request payload agent_id",
-        )
+    await ensure_agent_access(session, auth_context, payload.agent_id)
 
     agent = (await session.exec(select(Agent).where(Agent.agent_id == payload.agent_id))).first()
     if not agent:
@@ -494,8 +490,7 @@ async def get_spend_request_status(
     if not audit:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
 
-    if auth_context.agent_id and auth_context.agent_id != audit.agent_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    await ensure_agent_access(session, auth_context, audit.agent_id)
 
     if audit.status == "APPROVED_BY_HUMAN_EXECUTED":
         return {

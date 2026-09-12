@@ -14,6 +14,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.config import get_settings
 from app.db.postgres import async_engine
 from app.models.agent import Agent
+from app.models.user import User
 
 
 @dataclass(slots=True)
@@ -139,6 +140,39 @@ async def _load_agent_hmac_secret(agent_id: str) -> str:
     return agent.hmac_secret
 
 
+async def _assert_agent_owned_by_subject(session: AsyncSession, *, agent_id: str, auth_subject: str) -> Agent:
+    user = (await session.exec(select(User).where(User.auth_subject == auth_subject))).first()
+    agent = None
+    if user:
+        agent = (
+            await session.exec(
+                select(Agent).where(Agent.agent_id == agent_id).where(Agent.owner_user_id == user.id)
+            )
+        ).first()
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated user does not own this agent",
+        )
+    return agent
+
+
+async def ensure_agent_access(session: AsyncSession, auth_context: AuthContext, agent_id: str) -> None:
+    """Authorize the caller to act on behalf of agent_id.
+
+    HMAC callers may only act as the agent that signed the request. Auth0
+    operators may only act as agents they own.
+    """
+    if auth_context.method == "hmac":
+        if auth_context.agent_id != agent_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Authenticated agent_id does not match request payload agent_id",
+            )
+        return
+    await _assert_agent_owned_by_subject(session, agent_id=agent_id, auth_subject=auth_context.principal_id)
+
+
 async def verify_agent_auth(
     request: Request,
     authorization: str | None = Header(default=None),
@@ -149,13 +183,16 @@ async def verify_agent_auth(
     settings = get_settings()
 
     # Auth0 Bearer — accepted from dashboard operators and dev test buttons.
-    # agent_id is taken from x-agent-id (unauthenticated claim; the spend route
-    # validates it exists and is active before running checks). It must never be
-    # used as an authorization identity — authorize Auth0 principals by principal_id
-    # and the agent's owner_user_id instead.
+    # x-agent-id is an unauthenticated claim and is never an authorization
+    # identity on its own; it is only honoured after the authenticated user is
+    # confirmed to own that agent, and Auth0 principals are otherwise authorized
+    # by principal_id against the agent's owner_user_id.
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
         user_ctx = await run_in_threadpool(_verify_auth0_bearer, token)
+        if x_agent_id:
+            async with AsyncSession(async_engine) as session:
+                await _assert_agent_owned_by_subject(session, agent_id=x_agent_id, auth_subject=user_ctx.sub)
         return AuthContext(principal_id=user_ctx.sub, method="auth0", agent_id=x_agent_id)
 
     # HMAC-SHA256 — signed by real agent SDK.
