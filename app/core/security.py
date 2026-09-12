@@ -183,8 +183,10 @@ async def verify_agent_auth(
     settings = get_settings()
 
     # Auth0 Bearer — accepted from dashboard operators and dev test buttons.
-    # x-agent-id is an unauthenticated claim, so it is only honoured after the
-    # authenticated user is confirmed to own that agent.
+    # x-agent-id is an unauthenticated claim and is never an authorization
+    # identity on its own; it is only honoured after the authenticated user is
+    # confirmed to own that agent, and Auth0 principals are otherwise authorized
+    # by principal_id against the agent's owner_user_id.
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
         user_ctx = await run_in_threadpool(_verify_auth0_bearer, token)
