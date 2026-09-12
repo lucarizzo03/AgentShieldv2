@@ -41,6 +41,26 @@ end
 return {1, current, projected}
 """
 
+# Releases a tentative reservation on the exact key it was taken against.
+# A bare DECRBY would (a) recreate the key with a negative value and no TTL if
+# it had already expired, and (b) drive the counter below zero, handing the
+# agent extra budget.  This only touches a key that still exists and floors at 0.
+_RELEASE_BUDGET_RESERVATION = """
+if redis.call('EXISTS', KEYS[1]) == 0 then
+    return 0
+end
+local remaining = redis.call('DECRBY', KEYS[1], ARGV[1])
+if remaining < 0 then
+    redis.call('SET', KEYS[1], 0, 'KEEPTTL')
+end
+return 1
+"""
+
+
+def daily_budget_key(agent_id: str, asset_type: str, moment: datetime | None = None) -> str:
+    date_key = (moment or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
+    return f"budget:daily:{agent_id}:{asset_type}:{date_key}"
+
 
 def transaction_fingerprint(
     vendor: str,
@@ -77,8 +97,7 @@ async def run_quantitative_checks(
     settings = get_settings()
     check = CheckResult()
 
-    date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    budget_key = f"budget:daily:{agent.agent_id}:{asset_type}:{date_key}"
+    budget_key = daily_budget_key(agent.agent_id, asset_type)
     loop_key = f"loop:txn:{agent.agent_id}:{fingerprint}"
     burst_key = (
         f"dest:burst:{agent.agent_id}:{network}:{destination_address}"
@@ -119,6 +138,7 @@ async def run_quantitative_checks(
                 check.reasons.append("DESTINATION_BURST_DETECTED")
 
     check.context = {
+        "budget_key": budget_key,
         "daily_spent_usd": round(current_spent / 100, 2),
         "projected_spent_usd": round(projected / 100, 2),
         "budget_exceeded": budget_exceeded,
@@ -132,28 +152,27 @@ async def run_quantitative_checks(
 async def commit_budget_spend(redis: Redis, agent_id: str, asset_type: str, amount_cents: int) -> None:
     """Full budget commit (INCRBY + TTL).  Used by the HITL APPROVE path where
     the earlier tentative reservation was rolled back before the human decision."""
-    date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    budget_key = f"budget:daily:{agent_id}:{asset_type}:{date_key}"
+    budget_key = daily_budget_key(agent_id, asset_type)
     async with redis.pipeline() as pipe:
         pipe.incrby(budget_key, amount_cents)
         pipe.expire(budget_key, seconds_until_next_utc_midnight())
         await pipe.execute()
 
 
-async def finalize_budget_reservation(redis: Redis, agent_id: str, asset_type: str, amount_cents: int) -> None:
+async def finalize_budget_reservation(redis: Redis, budget_key: str) -> None:
     """Finalizes a tentative reservation made during the budget check by refreshing
     the TTL.  The INCRBY already happened atomically in _CHECK_AND_RESERVE_BUDGET,
     so this only needs to keep the key alive until midnight."""
-    date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    budget_key = f"budget:daily:{agent_id}:{asset_type}:{date_key}"
     await redis.expire(budget_key, seconds_until_next_utc_midnight())
 
 
-async def rollback_budget_reservation(redis: Redis, agent_id: str, asset_type: str, amount_cents: int) -> None:
+async def rollback_budget_reservation(redis: Redis, budget_key: str, amount_cents: int) -> None:
     """Rolls back the tentative budget reservation when a spend is denied
     (MALICIOUS verdict) or put on hold (SUSPICIOUS / HITL).  For HITL, the
-    amount is re-committed via commit_budget_spend only after human approval."""
-    date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    budget_key = f"budget:daily:{agent_id}:{asset_type}:{date_key}"
-    await redis.decrby(budget_key, amount_cents)
+    amount is re-committed via commit_budget_spend only after human approval.
+
+    ``budget_key`` must be the key the reservation was taken against, not a key
+    recomputed from the current time: a rollback that crosses UTC midnight would
+    otherwise decrement the next day's counter."""
+    await redis.eval(_RELEASE_BUDGET_RESERVATION, 1, budget_key, amount_cents)
 
