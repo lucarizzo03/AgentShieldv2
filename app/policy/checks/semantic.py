@@ -1,12 +1,9 @@
+from app.core.config import get_settings
 from app.policy.verdicts import CheckResult
 from app.services.slm.client import AnthropicSemanticClient
 
-# Thresholds operate on the 0-100 normalized alignment score (higher = more aligned = safer).
-# >= 75  → ALIGNED  → safe
-# 45-74  → WEAK     → suspicious (HITL)
-# < 45   → MISMATCH → hard block
-_SAFE_THRESHOLD = 75
-_BLOCK_THRESHOLD = 45
+# Thresholds operate on the 0-100 normalized alignment score (higher = more aligned
+# = safer) and come from settings; see Settings.semantic_aligned_min_score.
 
 
 def _coerce_risk_score(raw) -> int | None:
@@ -66,9 +63,10 @@ async def run_semantic_checks(
     # alignment score (100=safe, 0=dangerous) so thresholds read naturally.
     raw_score = 100 - risk_score
 
-    if raw_score >= _SAFE_THRESHOLD:
+    settings = get_settings()
+    if raw_score >= settings.semantic_aligned_min_score:
         alignment_label = "ALIGNED"
-    elif raw_score >= _BLOCK_THRESHOLD:
+    elif raw_score >= settings.semantic_weak_suspicious_min_score:
         alignment_label = "WEAK"
     else:
         alignment_label = "MISMATCH"
@@ -88,5 +86,9 @@ async def run_semantic_checks(
         "raw_risk_score": raw_score,
         "reason_codes": reason_codes,
         "evaluation_error": False,
+        "thresholds": {
+            "aligned_min": settings.semantic_aligned_min_score,
+            "weak_min": settings.semantic_weak_suspicious_min_score,
+        },
     }
     return check
