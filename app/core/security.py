@@ -150,7 +150,9 @@ async def verify_agent_auth(
 
     # Auth0 Bearer — accepted from dashboard operators and dev test buttons.
     # agent_id is taken from x-agent-id (unauthenticated claim; the spend route
-    # validates it exists and is active before running checks).
+    # validates it exists and is active before running checks). It must never be
+    # used as an authorization identity — authorize Auth0 principals by principal_id
+    # and the agent's owner_user_id instead.
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
         user_ctx = await run_in_threadpool(_verify_auth0_bearer, token)
