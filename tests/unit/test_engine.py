@@ -4,6 +4,7 @@ import pytest
 import pytest_asyncio
 from redis.asyncio import Redis
 
+from app.core.config import get_settings
 from app.models.agent import Agent
 from app.policy.checks.quantitative import transaction_fingerprint
 from app.policy.engine import run_financial_triangulation
@@ -27,6 +28,13 @@ async def redis():
 @pytest.fixture
 def semantic():
     return AnthropicSemanticClient()
+
+
+@pytest.fixture(autouse=True)
+def _no_shadow_eval(monkeypatch):
+    """Shadow evaluation is sampled, so hard-deny assertions about empty
+    semantic/goal-drift results only hold with sampling off."""
+    monkeypatch.setattr(get_settings(), "shadow_eval_sample_rate", 0.0, raising=False)
 
 
 # ---------------------------------------------------------------------------

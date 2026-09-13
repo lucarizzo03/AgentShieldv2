@@ -1,10 +1,11 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.core.metrics import increment
 from app.db.postgres import async_engine
 from app.db.redis import redis_client
 from app.models.dashboard_notification import DashboardNotification
@@ -20,7 +21,7 @@ _SWEEP_LOCK_KEY = "lock:hitl:expiry-sweeper"
 
 async def _sweep_once() -> int:
     """Expire overdue PendingSpend rows. Returns number of rows expired."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expired_count = 0
 
     async with AsyncSession(async_engine) as session:
@@ -82,6 +83,7 @@ async def _sweep_once() -> int:
             expired_count += 1
 
         if expired_count:
+            increment("hitl.expired", expired_count)
             await session.commit()
             logger.info("HITL expiry sweep: expired %d request(s)", expired_count)
 

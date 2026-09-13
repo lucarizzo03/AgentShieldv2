@@ -44,6 +44,12 @@ class Settings(BaseSettings):
     budget_reservation_marker_ttl_seconds: int = Field(default=900)
     budget_reservation_grace_seconds: int = Field(default=120)
     budget_reconcile_interval_seconds: int = Field(default=60)
+    # /metrics is unauthenticated only in dev; set a token to scrape it anywhere
+    # else, since the exposition leaks verdict mix and volume.
+    metrics_auth_token: str = Field(default="")
+    # Fraction of A/B hard-denies that still get evaluated by Checks C/D in
+    # shadow mode, recorded but never enforced.
+    shadow_eval_sample_rate: float = Field(default=0.1, ge=0.0, le=1.0)
     api_auth_header: str = Field(default="x-agent-key")
     signature_tolerance_seconds: int = Field(default=300)
     agent_hmac_secret: str = Field(default="dev-agent-hmac-secret-change-me")
