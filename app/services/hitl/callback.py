@@ -13,13 +13,14 @@ import ipaddress
 import json
 import logging
 import socket
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from urllib.parse import urlparse
 from uuid import uuid4
 
 import httpx
 
 from app.core.config import get_settings
+from app.core.metrics import increment
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,7 @@ async def deliver_verdict_callback(
     """
     request_id = body.get("request_id")
     if is_ssrf_blocked(callback_url):
+        increment("hitl.callback.blocked_ssrf")
         logger.warning(
             "HITL callback blocked (SSRF)", extra={"request_id": request_id, "url": callback_url}
         )
@@ -115,7 +117,7 @@ async def deliver_verdict_callback(
     path = urlparse(callback_url).path
 
     for attempt in range(len(_RETRY_DELAYS_SECONDS) + 1):
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = datetime.now(UTC).isoformat()
         signature = sign_callback(secret, path, timestamp, body_bytes)
         headers = {
             "Content-Type": "application/json",
@@ -132,12 +134,14 @@ async def deliver_verdict_callback(
                     timeout=_ATTEMPT_TIMEOUT_SECONDS,
                 )
             if resp.status_code < 300:
+                increment("hitl.callback.delivered")
                 logger.info(
                     "HITL callback delivered",
                     extra={"request_id": request_id, "url": callback_url, "attempt": attempt + 1},
                 )
                 return True
             if resp.status_code < 500:
+                increment("hitl.callback.rejected")
                 logger.warning(
                     "HITL callback rejected by agent — not retrying",
                     extra={"request_id": request_id, "status": resp.status_code},
@@ -160,6 +164,7 @@ async def deliver_verdict_callback(
         if attempt < len(_RETRY_DELAYS_SECONDS):
             await asyncio.sleep(_RETRY_DELAYS_SECONDS[attempt])
 
+    increment("hitl.callback.failed")
     logger.error(
         "HITL callback exhausted retries — agent must poll for the verdict",
         extra={"request_id": request_id, "url": callback_url},
