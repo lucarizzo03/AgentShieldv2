@@ -38,10 +38,10 @@ export default function AuthShell({ label, title, subtitle, children, footer }) 
           cursor: pointer; transition: border-color 100ms, color 100ms;
         }
         .auth-btn-ghost:hover { border-color: #444; color: #ededed; }
-        .auth-lnk { color: #666; text-decoration: none; font-size: 13px; transition: color 100ms; }
+        .auth-lnk { color: #949494; text-decoration: none; font-size: 13px; transition: color 100ms; }
         .auth-lnk:hover { color: #ccc; }
-        .auth-note { border: 1px solid #1e1e1e; background: #101010; padding: 12px 14px; font-size: 12.5px; line-height: 1.6; color: #8a8a8a; }
-        .auth-note-bad { border-color: #3a1d1d; background: #140f0f; color: #e0a1a1; }
+        .auth-note { border: 1px solid #242424; background: #101010; padding: 12px 14px; font-size: 12.5px; line-height: 1.6; color: #9a9a9a; }
+        .auth-note-bad { border-color: #4a2424; background: #140f0f; color: #eaaaaa; }
         @keyframes authSpin { to { transform: rotate(360deg); } }
         .auth-spinner {
           width: 14px; height: 14px; border: 1.5px solid #2e2e2e; border-top-color: #ededed;
@@ -72,12 +72,12 @@ export default function AuthShell({ label, title, subtitle, children, footer }) 
 
         <div style={{ flex: 1, display: "grid", placeItems: "center", padding: "32px 24px 64px" }}>
           <div style={{ width: "100%", maxWidth: 400 }}>
-            <div className="auth-mono" style={{ fontSize: 10, letterSpacing: "0.12em", color: "#444", marginBottom: 14 }}>
+            <div className="auth-mono" style={{ fontSize: 10, letterSpacing: "0.12em", color: "#8a8a8a", marginBottom: 14 }}>
               {label}
             </div>
             <h1 style={{ margin: 0, fontSize: 28, fontWeight: 600, letterSpacing: "-0.02em", lineHeight: 1.15 }}>{title}</h1>
             {subtitle ? (
-              <p style={{ margin: "12px 0 0", fontSize: 14, lineHeight: 1.65, color: "#777" }}>{subtitle}</p>
+              <p style={{ margin: "12px 0 0", fontSize: 14, lineHeight: 1.65, color: "#a1a1a1" }}>{subtitle}</p>
             ) : null}
             <div style={{ marginTop: 26, display: "grid", gap: 12 }}>{children}</div>
             {footer ? <div style={{ marginTop: 22 }}>{footer}</div> : null}
