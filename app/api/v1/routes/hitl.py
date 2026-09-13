@@ -28,6 +28,7 @@ from app.policy.checks.quantitative import (
     daily_budget_key,
     rollback_budget_reservation,
 )
+from app.policy.provenance import engine_provenance
 from app.services.activity_log import append_agent_activity
 from app.services.hitl.callback import build_callback_body, deliver_verdict_callback
 from app.services.hitl.state_manager import apply_resolution, ensure_pending_is_resolvable
@@ -186,6 +187,7 @@ async def _resolve_pending(
             goal_drift_result=pending.verdict_snapshot.get("goal_drift_result", {}),
             verdict="SAFE",
             status="APPROVED_BY_HUMAN_EXECUTED",
+            engine_provenance=engine_provenance(),
         ))
         append_agent_activity(
             session,
@@ -214,6 +216,7 @@ async def _resolve_pending(
             goal_drift_result=pending.verdict_snapshot.get("goal_drift_result", {}),
             verdict="MALICIOUS",
             status="DENIED_BY_HUMAN",
+            engine_provenance=engine_provenance(),
         ))
         append_agent_activity(
             session,

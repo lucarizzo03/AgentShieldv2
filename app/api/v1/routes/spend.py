@@ -1,5 +1,4 @@
 import logging
-from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -31,6 +30,7 @@ from app.policy.checks.quantitative import (
     velocity_fingerprint,
 )
 from app.policy.engine import run_financial_triangulation
+from app.policy.provenance import engine_provenance
 from app.services.activity_log import append_agent_activity
 from app.services.budget_reconciler import release_outstanding_reservation
 from app.services.hitl.notifier import HitlNotifier
@@ -59,8 +59,10 @@ _HIGH_RISK_REASONS = {
     "VENDOR_DOMAIN_PHISHING_PATTERN",
     "SEMANTIC_MISMATCH_HIGH",
     "SEMANTIC_EVAL_UNAVAILABLE",
+    "SEMANTIC_LABEL_SCORE_DISAGREEMENT",
     "GOAL_DRIFT_DETECTED",
     "GOAL_DRIFT_EVAL_UNAVAILABLE",
+    "GOAL_DRIFT_LOW_CONFIDENCE",
 }
 
 _CHECK_REASON_GROUPS = {
@@ -88,12 +90,14 @@ _CHECK_REASON_GROUPS = {
         "SEMANTIC_ALIGNMENT_WEAK",
         "SEMANTIC_ALIGNMENT_HIGH",
         "SEMANTIC_EVAL_UNAVAILABLE",
+        "SEMANTIC_LABEL_SCORE_DISAGREEMENT",
     },
     "check_d_goal_drift": {
         "GOAL_DRIFT_DETECTED",
         "GOAL_WITHIN_SCOPE",
         "GOAL_DRIFT_SKIPPED_NO_SCOPES",
         "GOAL_DRIFT_EVAL_UNAVAILABLE",
+        "GOAL_DRIFT_LOW_CONFIDENCE",
     },
 }
 
@@ -159,30 +163,12 @@ async def _record_idempotency_replay(session: AsyncSession, *, request_id: str) 
     if not original:
         return
 
-    quantitative_result = deepcopy(original.quantitative_result or {})
-    quantitative_result["idempotency_replay"] = True
-    quantitative_result["idempotency_replay_at"] = datetime.now(timezone.utc).isoformat()
-
-    replay_row = SpendAuditLog(
-        request_id=original.request_id,
-        agent_id=original.agent_id,
-        declared_goal=original.declared_goal,
-        amount_cents=original.amount_cents,
-        currency=original.currency,
-        asset_type=original.asset_type,
-        stablecoin_symbol=original.stablecoin_symbol,
-        network=original.network,
-        destination_address=original.destination_address,
-        vendor_url_or_name=original.vendor_url_or_name,
-        item_description=original.item_description,
-        quantitative_result=quantitative_result,
-        policy_result=deepcopy(original.policy_result or {}),
-        semantic_result=deepcopy(original.semantic_result or {}),
-        goal_drift_result=deepcopy(original.goal_drift_result or {}),
-        verdict=original.verdict,
-        status=original.status,
-    )
-    session.add(replay_row)
+    # A replay is a cached answer, not a second evaluation: counting it on the
+    # original decision keeps verdict mix and block rates measuring decisions.
+    original.idempotency_replay_count = (original.idempotency_replay_count or 0) + 1
+    original.last_replayed_at = datetime.now(timezone.utc)
+    session.add(original)
+    increment("spend.idempotency.replay")
     append_agent_activity(
         session,
         agent_id=original.agent_id,
@@ -441,6 +427,7 @@ async def _record_decision(
             goal_drift_result=tri.goal_drift_result,
             verdict="SAFE",
             status="APPROVED_EXECUTED",
+            engine_provenance=engine_provenance(),
         )
         session.add(audit)
         append_agent_activity(
@@ -508,6 +495,7 @@ async def _record_decision(
             goal_drift_result=tri.goal_drift_result,
             verdict="MALICIOUS",
             status="BLOCKED",
+            engine_provenance=engine_provenance(),
         )
         session.add(audit)
         append_agent_activity(
@@ -622,6 +610,7 @@ async def _record_decision(
         goal_drift_result=tri.goal_drift_result,
         verdict="SUSPICIOUS",
         status="PENDING_HITL",
+        engine_provenance=engine_provenance(),
     )
     session.add(pending)
     session.add(notification)

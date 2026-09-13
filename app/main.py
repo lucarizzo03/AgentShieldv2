@@ -109,8 +109,11 @@ def create_app() -> FastAPI:
                                     policy_result={"validation_errors": encoded_errors},
                                     semantic_result={},
                                     goal_drift_result={},
-                                    verdict="MALICIOUS",
-                                    status="BLOCKED",
+                                    # A malformed request was never evaluated, so
+                                    # it is not a verdict: calling it MALICIOUS
+                                    # inflates the block rate with client bugs.
+                                    verdict="REJECTED",
+                                    status="VALIDATION_REJECTED",
                                 )
                             )
                             await session.commit()
