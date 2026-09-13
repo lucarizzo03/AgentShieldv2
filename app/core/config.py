@@ -63,9 +63,9 @@ class Settings(BaseSettings):
         default="http://localhost:5173,http://127.0.0.1:5173",
         validation_alias=AliasChoices("CORS_ALLOWED_ORIGINS"),
     )
-    auth0_domain: str = Field(default="")
-    auth0_audience: str = Field(default="")
-    auth0_issuer: str = Field(default="")
+    cognito_region: str = Field(default="")
+    cognito_user_pool_id: str = Field(default="")
+    cognito_app_client_id: str = Field(default="")
 
     @field_validator("postgres_dsn", mode="before")
     @classmethod

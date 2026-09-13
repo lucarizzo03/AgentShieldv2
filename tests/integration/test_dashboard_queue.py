@@ -64,7 +64,7 @@ def _mock_user_auth():
         sub="agent:agent_dash",
         email=None,
         display_name=None,
-        method="auth0",
+        method="cognito",
         agent_id="agent_dash",
     )
 

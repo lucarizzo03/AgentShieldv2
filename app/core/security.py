@@ -30,7 +30,7 @@ class UserAuthContext:
     sub: str
     email: str | None
     display_name: str | None
-    method: str = "auth0"
+    method: str = "cognito"
     agent_id: str | None = None
     claims: dict[str, Any] = field(default_factory=dict)
 
@@ -68,23 +68,15 @@ def _verify_hmac(secret: str, message: str, signature: str) -> bool:
     return hmac.compare_digest(expected, _normalize_signature(signature))
 
 
-def _auth0_issuer() -> str:
+def _cognito_issuer() -> str:
     settings = get_settings()
-    if settings.auth0_issuer:
-        issuer = settings.auth0_issuer.strip()
-        if not issuer.startswith("https://"):
-            issuer = f"https://{issuer}"
-        return issuer.rstrip("/") + "/"
-    if settings.auth0_domain:
-        domain = settings.auth0_domain.rstrip("/")
-        if domain.startswith("https://"):
-            return domain + "/"
-        return f"https://{domain}/"
-    return ""
+    if not settings.cognito_region or not settings.cognito_user_pool_id:
+        return ""
+    return f"https://cognito-idp.{settings.cognito_region}.amazonaws.com/{settings.cognito_user_pool_id}"
 
 
 @lru_cache(maxsize=1)
-def _auth0_jwks_client(issuer: str) -> jwt.PyJWKClient:
+def _cognito_jwks_client(issuer: str) -> jwt.PyJWKClient:
     return jwt.PyJWKClient(
         f"{issuer.rstrip('/')}/.well-known/jwks.json",
         cache_keys=True,
@@ -92,22 +84,24 @@ def _auth0_jwks_client(issuer: str) -> jwt.PyJWKClient:
     )
 
 
-def _verify_auth0_bearer(token: str) -> UserAuthContext:
+def _verify_cognito_bearer(token: str) -> UserAuthContext:
     settings = get_settings()
-    issuer = _auth0_issuer()
-    if not issuer or not settings.auth0_audience:
+    issuer = _cognito_issuer()
+    if not issuer or not settings.cognito_app_client_id:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Auth0 is not configured for this environment",
+            detail="Cognito is not configured for this environment",
         )
     try:
-        signing_key = _auth0_jwks_client(issuer).get_signing_key_from_jwt(token).key
+        signing_key = _cognito_jwks_client(issuer).get_signing_key_from_jwt(token).key
+        # Cognito access tokens carry no standard `aud` claim (unlike Auth0) —
+        # audience is instead enforced below via the `client_id` claim.
         claims = jwt.decode(
             token,
             signing_key,
             algorithms=["RS256"],
-            audience=settings.auth0_audience,
             issuer=issuer,
+            options={"verify_aud": False},
         )
     except jwt.PyJWKClientError as exc:
         raise HTTPException(
@@ -117,26 +111,39 @@ def _verify_auth0_bearer(token: str) -> UserAuthContext:
     except jwt.ExpiredSignatureError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Auth0 token has expired",
+            detail="Cognito token has expired",
         ) from exc
     except jwt.InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Auth0 token",
+            detail="Invalid Cognito token",
         ) from exc
+    if claims.get("token_use") != "access":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cognito token is not an access token",
+        )
+    if claims.get("client_id") != settings.cognito_app_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cognito token was not issued for this app client",
+        )
     sub = claims.get("sub")
     if not isinstance(sub, str) or not sub:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Auth0 token missing subject",
+            detail="Cognito token missing subject",
         )
+    # Cognito access tokens (unlike Auth0's) carry no email/name claims; callers
+    # fall back to a placeholder email via get_or_create_user until/unless a
+    # separate /oauth2/userInfo lookup is added.
     email = claims.get("email")
-    display_name = claims.get("name") or claims.get("nickname")
+    display_name = claims.get("name")
     return UserAuthContext(
         sub=sub,
         email=email if isinstance(email, str) else None,
         display_name=display_name if isinstance(display_name, str) else None,
-        method="auth0",
+        method="cognito",
         claims=claims,
     )
 
@@ -177,14 +184,14 @@ async def _assert_agent_owned_by_subject(session: AsyncSession, *, agent_id: str
 async def ensure_operator_owns_agent(
     session: AsyncSession, *, operator: UserAuthContext, agent_id: str
 ) -> Agent:
-    """Authorize an Auth0 operator to act on a specific agent."""
+    """Authorize a Cognito operator to act on a specific agent."""
     return await _assert_agent_owned_by_subject(session, agent_id=agent_id, auth_subject=operator.sub)
 
 
 async def ensure_agent_access(session: AsyncSession, auth_context: AuthContext, agent_id: str) -> None:
     """Authorize the caller to act on behalf of agent_id.
 
-    HMAC callers may only act as the agent that signed the request. Auth0
+    HMAC callers may only act as the agent that signed the request. Cognito
     operators may only act as agents they own.
     """
     if auth_context.method == "hmac":
@@ -206,18 +213,18 @@ async def verify_agent_auth(
 ) -> AuthContext:
     settings = get_settings()
 
-    # Auth0 Bearer — accepted from dashboard operators and dev test buttons.
+    # Cognito Bearer — accepted from dashboard operators and dev test buttons.
     # x-agent-id is an unauthenticated claim and is never an authorization
     # identity on its own; it is only honoured after the authenticated user is
-    # confirmed to own that agent, and Auth0 principals are otherwise authorized
+    # confirmed to own that agent, and Cognito principals are otherwise authorized
     # by principal_id against the agent's owner_user_id.
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        user_ctx = await run_in_threadpool(_verify_auth0_bearer, token)
+        user_ctx = await run_in_threadpool(_verify_cognito_bearer, token)
         if x_agent_id:
             async with AsyncSession(async_engine) as session:
                 await _assert_agent_owned_by_subject(session, agent_id=x_agent_id, auth_subject=user_ctx.sub)
-        return AuthContext(principal_id=user_ctx.sub, method="auth0", agent_id=x_agent_id)
+        return AuthContext(principal_id=user_ctx.sub, method="cognito", agent_id=x_agent_id)
 
     # HMAC-SHA256 — signed by real agent SDK.
     if x_agent_id and x_timestamp and x_signature:
@@ -243,7 +250,7 @@ async def verify_agent_auth(
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing authentication. Provide an Auth0 Bearer token or HMAC signature headers (x-agent-id, x-timestamp, x-signature).",
+        detail="Missing authentication. Provide a Cognito Bearer token or HMAC signature headers (x-agent-id, x-timestamp, x-signature).",
     )
 
 
@@ -252,10 +259,10 @@ async def verify_user_auth(
 ) -> UserAuthContext:
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        return await run_in_threadpool(_verify_auth0_bearer, token)
+        return await run_in_threadpool(_verify_cognito_bearer, token)
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing user authentication. Provide Auth0 Bearer token.",
+        detail="Missing user authentication. Provide Cognito Bearer token.",
     )
 
 
@@ -295,15 +302,15 @@ async def verify_hitl_auth(
     x_webhook_signature: str | None = Header(default=None),
     x_webhook_timestamp: str | None = Header(default=None),
 ) -> UserAuthContext | None:
-    """Accept either Auth0 Bearer (dashboard operators) or webhook HMAC (external integrations).
+    """Accept either Cognito Bearer (dashboard operators) or webhook HMAC (external integrations).
 
-    Returns the operator context for Auth0 callers so the route can authorize
+    Returns the operator context for Cognito callers so the route can authorize
     them against the agent that owns the pending request; webhook callers are
     already scoped by the shared secret and return ``None``.
     """
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        return await run_in_threadpool(_verify_auth0_bearer, token)
+        return await run_in_threadpool(_verify_cognito_bearer, token)
 
     if x_webhook_signature and x_webhook_timestamp:
         settings = get_settings()
@@ -326,5 +333,5 @@ async def verify_hitl_auth(
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Provide an Auth0 Bearer token or webhook HMAC signature headers (x-webhook-signature + x-webhook-timestamp)",
+        detail="Provide a Cognito Bearer token or webhook HMAC signature headers (x-webhook-signature + x-webhook-timestamp)",
     )

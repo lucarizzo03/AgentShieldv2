@@ -56,7 +56,7 @@ export default function AuthView() {
     <AuthShell
       label="SIGN IN"
       title="Sign in to AgentShield"
-      subtitle="Auth0 handles the login. Your agents, spend activity, and approval queue live behind it."
+      subtitle="Cognito handles the login. Your agents, spend activity, and approval queue live behind it."
       footer={
         <p className="auth-mono" style={{ margin: 0, fontSize: 11, color: "#858585", letterSpacing: "0.06em" }}>
           AUTHORIZATION CODE + PKCE
@@ -67,7 +67,7 @@ export default function AuthView() {
 
       {!authConfigured ? (
         <div className="auth-note">
-          Auth0 is not configured for this deployment. Missing{" "}
+          Cognito is not configured for this deployment. Missing{" "}
           <span className="auth-mono" style={{ color: "#ededed" }}>
             {missingKeys.join(", ")}
           </span>
@@ -79,10 +79,10 @@ export default function AuthView() {
         {pending ? (
           <>
             <span className="auth-spinner" style={{ marginRight: 10 }} />
-            Redirecting to Auth0
+            Redirecting to Cognito
           </>
         ) : (
-          "Continue with Auth0"
+          "Continue with Cognito"
         )}
       </button>
 

@@ -4,7 +4,7 @@ const PKCE_STATE_KEY = "agentshield_pkce_state";
 const RETURN_TO_KEY = "agentshield_return_to";
 
 // A callback URL can be replayed by React StrictMode's double effect, a refresh
-// or a back navigation. Auth0 only honours an authorization code once, so the
+// or a back navigation. Cognito only honours an authorization code once, so the
 // exchange is deduplicated per code and its result replayed.
 const inFlightExchanges = new Map();
 
@@ -42,20 +42,19 @@ async function pkceChallengeFromVerifier(verifier) {
 }
 
 export function getAuthConfig() {
-  const domain = (import.meta.env.VITE_AUTH0_DOMAIN || "").replace(/\/$/, "");
+  const domain = (import.meta.env.VITE_COGNITO_DOMAIN || "").replace(/\/$/, "");
   return {
     domain: domain.startsWith("https://") ? domain : domain ? `https://${domain}` : "",
-    clientId: import.meta.env.VITE_AUTH0_CLIENT_ID || "",
-    audience: import.meta.env.VITE_AUTH0_AUDIENCE || "",
-    redirectUri: import.meta.env.VITE_AUTH0_REDIRECT_URI || `${window.location.origin}/auth/callback`,
-    logoutUri: import.meta.env.VITE_AUTH0_LOGOUT_URI || `${window.location.origin}/`,
-    scopes: import.meta.env.VITE_AUTH0_SCOPES || "openid profile email",
+    clientId: import.meta.env.VITE_COGNITO_CLIENT_ID || "",
+    redirectUri: import.meta.env.VITE_COGNITO_REDIRECT_URI || `${window.location.origin}/auth/callback`,
+    logoutUri: import.meta.env.VITE_COGNITO_LOGOUT_URI || `${window.location.origin}/`,
+    scopes: import.meta.env.VITE_COGNITO_SCOPES || "openid profile email",
   };
 }
 
 export function isAuthConfigured() {
   const cfg = getAuthConfig();
-  return Boolean(cfg.domain && cfg.clientId && cfg.redirectUri && cfg.audience);
+  return Boolean(cfg.domain && cfg.clientId && cfg.redirectUri);
 }
 
 export function getIdToken() {
@@ -97,10 +96,9 @@ export function clearAuthSession() {
 export function missingAuthConfigKeys() {
   const cfg = getAuthConfig();
   return [
-    ["VITE_AUTH0_DOMAIN", cfg.domain],
-    ["VITE_AUTH0_CLIENT_ID", cfg.clientId],
-    ["VITE_AUTH0_AUDIENCE", cfg.audience],
-    ["VITE_AUTH0_REDIRECT_URI", cfg.redirectUri],
+    ["VITE_COGNITO_DOMAIN", cfg.domain],
+    ["VITE_COGNITO_CLIENT_ID", cfg.clientId],
+    ["VITE_COGNITO_REDIRECT_URI", cfg.redirectUri],
   ]
     .filter(([, value]) => !value)
     .map(([name]) => name);
@@ -109,7 +107,7 @@ export function missingAuthConfigKeys() {
 export async function startLogin({ returnTo = "/app" } = {}) {
   const cfg = getAuthConfig();
   if (!isAuthConfigured()) {
-    throw new Error("Auth0 is not configured.");
+    throw new Error("Cognito is not configured.");
   }
   const verifier = randomString(64);
   const challenge = await pkceChallengeFromVerifier(verifier);
@@ -119,12 +117,11 @@ export async function startLogin({ returnTo = "/app" } = {}) {
   sessionStorage.setItem(PKCE_STATE_KEY, state);
   sessionStorage.setItem(RETURN_TO_KEY, returnTo);
 
-  const authorize = new URL(`${cfg.domain}/authorize`);
+  const authorize = new URL(`${cfg.domain}/oauth2/authorize`);
   authorize.searchParams.set("response_type", "code");
   authorize.searchParams.set("client_id", cfg.clientId);
   authorize.searchParams.set("redirect_uri", cfg.redirectUri);
   authorize.searchParams.set("scope", cfg.scopes);
-  authorize.searchParams.set("audience", cfg.audience);
   authorize.searchParams.set("state", state);
   authorize.searchParams.set("code_challenge", challenge);
   authorize.searchParams.set("code_challenge_method", "S256");
@@ -140,7 +137,7 @@ export async function handleAuthCallback(search) {
     throw new Error(errorDescription || error);
   }
   if (!code) {
-    throw new Error("Authorization code missing from the Auth0 redirect.");
+    throw new Error("Authorization code missing from the Cognito redirect.");
   }
   const pending = inFlightExchanges.get(code);
   if (pending) return pending;
@@ -171,24 +168,24 @@ async function exchangeCodeForToken(code, returnedState) {
     code_verifier: verifier,
   };
 
-  const response = await fetch(`${cfg.domain}/oauth/token`, {
+  const response = await fetch(`${cfg.domain}/oauth2/token`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(tokenPayload),
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(tokenPayload).toString(),
   });
   if (!response.ok) {
     const detail = await response.json().catch(() => null);
     throw new Error(
-      detail?.error_description || `Auth0 rejected the token exchange (${response.status}).`
+      detail?.error_description || `Cognito rejected the token exchange (${response.status}).`
     );
   }
   const data = await response.json();
   const accessToken = data.access_token;
   if (!accessToken) {
-    throw new Error("Auth0 returned no access token. Check the API audience configuration.");
+    throw new Error("Cognito returned no access token. Check the app client's allowed OAuth scopes.");
   }
   if (isTokenExpired(accessToken, 0)) {
-    throw new Error("Auth0 returned a token this dashboard cannot read. Check the API audience configuration.");
+    throw new Error("Cognito returned a token this dashboard cannot read.");
   }
   localStorage.setItem(AUTH_STORAGE_KEY, accessToken);
 
@@ -217,9 +214,9 @@ export function logout() {
   const cfg = getAuthConfig();
   clearAuthSession();
   if (isAuthConfigured()) {
-    const logoutUrl = new URL(`${cfg.domain}/v2/logout`);
+    const logoutUrl = new URL(`${cfg.domain}/logout`);
     logoutUrl.searchParams.set("client_id", cfg.clientId);
-    logoutUrl.searchParams.set("returnTo", cfg.logoutUri);
+    logoutUrl.searchParams.set("logout_uri", cfg.logoutUri);
     window.location.assign(logoutUrl.toString());
     return;
   }

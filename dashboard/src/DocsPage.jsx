@@ -282,7 +282,7 @@ export default function DocsPage({ agentId, activeHmac, secretReveal, setSecretR
 client = AgentShield(
     agent_id="\${AGENT_ID}",
     hmac_secret="\${HMAC_SECRET}",
-    base_url="https://agentshieldv2-backend-production.up.railway.app",
+    base_url="\${API_BASE}",
 )
 
 result = client.spend_request(SpendRequest(
@@ -328,7 +328,7 @@ elif result.pending_hitl:
           <P>Credentials can also be provisioned programmatically via the Admin client:</P>
           <CodeBlock lang="python" code={`from agentshield import AgentShieldAdmin, AgentCreateRequest
 
-admin = AgentShieldAdmin(bearer_token="your-auth0-token")
+admin = AgentShieldAdmin(bearer_token="your-cognito-token")
 agent = admin.create_agent(AgentCreateRequest(
     agent_name="my-buying-agent",
     daily_spend_limit_usd=500,
@@ -480,7 +480,7 @@ except AgentShieldAPIError as e:
           <P>Manage agents programmatically with <InlineCode>AgentShieldAdmin</InlineCode>.</P>
           <CodeBlock lang="python" code={`from agentshield import AgentShieldAdmin, AgentCreateRequest
 
-admin = AgentShieldAdmin(bearer_token="your-auth0-token")
+admin = AgentShieldAdmin(bearer_token="your-cognito-token")
 
 # Create agent
 agent = admin.create_agent(AgentCreateRequest(
@@ -640,7 +640,7 @@ headers = {
           <CodeBlock lang="python" code={`# Resolve programmatically (e.g. from another agent or admin tool)
 from agentshield import AgentShieldAdmin, HitlResolveRequest
 
-admin = AgentShieldAdmin(bearer_token="your-auth0-token")
+admin = AgentShieldAdmin(bearer_token="your-cognito-token")
 admin.resolve_hitl(
     request_id="req_...",
     request=HitlResolveRequest(decision="APPROVE", note="Verified invoice"),
