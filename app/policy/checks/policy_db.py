@@ -100,7 +100,10 @@ def run_policy_checks(
     )
     amount_over_threshold = amount_cents > threshold
     if amount_over_threshold:
-        check.hard_deny = True
+        # Above the auto-approval ceiling the spend needs a human, not a denial:
+        # hard-denying here would return DO_NOT_RETRY and the reviewer would
+        # never see the request.
+        check.suspicious = True
         check.reasons.append("AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD")
     else:
         check.reasons.append("AMOUNT_WITHIN_AUTO_APPROVAL_THRESHOLD")

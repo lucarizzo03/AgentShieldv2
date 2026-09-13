@@ -319,7 +319,10 @@ async def _decide_spend(
                 # Reservation was made atomically during the budget check — just refresh TTL.
                 await finalize_budget_reservation(redis, tri.quantitative_result["budget_key"])
             else:
-                await commit_budget_spend(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
+                await commit_budget_spend(
+                    redis, payload.agent_id, payload.asset_type, payload.amount_cents,
+                    agent.daily_budget_limit_cents,
+                )
         except Exception:
             logger.critical(
                 "Budget commit failed after payment execution — manual recovery required",
