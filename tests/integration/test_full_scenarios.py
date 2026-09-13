@@ -350,8 +350,9 @@ class TestSafePath:
                 select(SpendAuditLog).where(SpendAuditLog.agent_id == "test_agent_001")
                 .order_by(SpendAuditLog.created_at.asc())
             ).all()
-        assert len(logs) == 2, f"Expected 2 audit records with replay marker, got {len(logs)}"
-        assert logs[-1].quantitative_result.get("idempotency_replay") is True
+        assert len(logs) == 1, f"Replay must not create a second decision row, got {len(logs)}"
+        assert logs[0].idempotency_replay_count == 1
+        assert logs[0].last_replayed_at is not None
 
     def test_suspended_agent_is_rejected_before_checks(self):
         with Session(engine) as session:
@@ -395,8 +396,8 @@ class TestSafePath:
                 select(SpendAuditLog).where(SpendAuditLog.request_id == body["request_id"])
             ).first()
         assert log is not None
-        assert log.status == "BLOCKED"
-        assert log.verdict == "MALICIOUS"
+        assert log.status == "VALIDATION_REJECTED"
+        assert log.verdict == "REJECTED"
         assert log.policy_result.get("validation_errors")
 
 
