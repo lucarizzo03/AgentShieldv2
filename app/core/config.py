@@ -26,6 +26,21 @@ class Settings(BaseSettings):
     #   below                                 → MISMATCH → hard block
     semantic_aligned_min_score: int = Field(default=75)
     semantic_weak_suspicious_min_score: int = Field(default=45)
+    # Deadlines around the Claude calls.  Anything slower than this degrades to
+    # HITL instead of holding a worker: a slow provider must not become latency
+    # for the calling agent.
+    anthropic_timeout_seconds: float = Field(default=8.0)
+    anthropic_max_retries: int = Field(default=1)
+    slm_deadline_seconds: float = Field(default=12.0)
+    # Consecutive failures before Checks C/D stop calling Anthropic and degrade
+    # straight to HITL, and how long that lasts before a single probe retries.
+    slm_breaker_failure_threshold: int = Field(default=5)
+    slm_breaker_cooldown_seconds: float = Field(default=30.0)
+    # How long an outstanding budget reservation stays discoverable, and how old
+    # it must be before the reconciler treats it as abandoned.
+    budget_reservation_marker_ttl_seconds: int = Field(default=900)
+    budget_reservation_grace_seconds: int = Field(default=120)
+    budget_reconcile_interval_seconds: int = Field(default=60)
     api_auth_header: str = Field(default="x-agent-key")
     signature_tolerance_seconds: int = Field(default=300)
     agent_hmac_secret: str = Field(default="dev-agent-hmac-secret-change-me")
