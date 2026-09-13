@@ -11,7 +11,7 @@ from app.api.v1.schemas.onboarding import (
     OnboardingBootstrapResponse,
     OnboardingChecklistResponse,
 )
-from app.core.security import UserAuthContext, verify_user_auth
+from app.core.security import UserAuthContext, ensure_operator_owns_agent, verify_user_auth
 from app.db.postgres import get_session
 from app.models.agent import Agent
 from app.models.spend_audit_log import SpendAuditLog
@@ -93,11 +93,10 @@ async def bootstrap_onboarding(
 @router.get("/onboarding/agents/{agent_id}/checklist", response_model=OnboardingChecklistResponse)
 async def get_onboarding_checklist(
     agent_id: str,
+    auth: UserAuthContext = Depends(verify_user_auth),
     session: AsyncSession = Depends(get_session),
 ):
-    agent = (await session.exec(select(Agent).where(Agent.agent_id == agent_id))).first()
-    if not agent:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    await ensure_operator_owns_agent(session, operator=auth, agent_id=agent_id)
 
     logs = (await session.exec(select(SpendAuditLog).where(SpendAuditLog.agent_id == agent_id))).all()
 

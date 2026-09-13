@@ -15,14 +15,20 @@ from app.api.v1.schemas.hitl import HitlResolveRequest
 from app.api.v1.schemas.spend import SpendRequest
 from app.core.config import get_settings
 from app.core.metrics import increment
-from app.core.security import verify_hitl_auth
+from app.core.security import UserAuthContext, ensure_operator_owns_agent, verify_hitl_auth
 from app.db.postgres import get_session
 from app.db.redis import get_redis
 from app.models.agent import Agent
 from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
-from app.policy.checks.quantitative import commit_budget_spend
+from app.policy.checks.policy_db import run_policy_checks
+from app.policy.checks.quantitative import (
+    commit_budget_spend,
+    daily_budget_key,
+    rollback_budget_reservation,
+)
+from app.policy.provenance import engine_provenance
 from app.services.activity_log import append_agent_activity
 from app.services.hitl.callback import build_callback_body, deliver_verdict_callback
 from app.services.hitl.state_manager import apply_resolution, ensure_pending_is_resolvable
@@ -72,6 +78,66 @@ def _email_error_page(message: str) -> str:
 router = APIRouter(tags=["hitl"])
 
 
+async def _reject_approval_if_stale(*, pending: PendingSpend, session: AsyncSession, redis: Redis) -> None:
+    """Re-run Check A and Check B against the agent's *current* state before an
+    approval releases money.
+
+    The reservation taken during evaluation was rolled back when the request was
+    parked, and the agent's config and daily spend can both have moved since —
+    so an approval minutes or hours later must be re-validated, not trusted.
+    The budget is committed here (atomically, under the current limit) so a
+    failed commit aborts the approval instead of resolving it with no money moved.
+    """
+    original = SpendRequest.model_validate(pending.payload_json)
+    agent = (await session.exec(select(Agent).where(Agent.agent_id == pending.agent_id))).first()
+    if not agent or agent.status != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agent is no longer active; approval rejected.",
+        )
+
+    policy = run_policy_checks(
+        agent=agent,
+        amount_cents=original.amount_cents,
+        vendor_url_or_name=original.vendor_url_or_name,
+        asset_type=original.asset_type,
+        stablecoin_symbol=original.stablecoin_symbol,
+        network=original.network,
+        destination_address=original.destination_address,
+        currency=original.currency,
+    )
+    if policy.hard_deny:
+        increment("hitl.approval.rejected_policy_changed")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Agent policy changed since evaluation; approval rejected: {', '.join(policy.reasons)}",
+        )
+
+    committed, spent_before = await commit_budget_spend(
+        redis=redis,
+        agent_id=original.agent_id,
+        asset_type=original.asset_type,
+        amount_cents=original.amount_cents,
+        daily_budget_limit_cents=agent.daily_budget_limit_cents,
+        currency=agent.currency,
+    )
+    if not committed:
+        increment("hitl.approval.rejected_budget_exceeded")
+        logger.warning(
+            "HITL approval rejected — agent is now over its daily budget",
+            extra={
+                "agent_id": original.agent_id,
+                "request_id": pending.request_id,
+                "amount_cents": original.amount_cents,
+                "daily_spent_cents": spent_before,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agent has exhausted its daily budget since evaluation; approval rejected.",
+        )
+
+
 async def _resolve_pending(
     *,
     request_id: str,
@@ -79,6 +145,7 @@ async def _resolve_pending(
     session: AsyncSession,
     redis: Redis,
     background_tasks: BackgroundTasks,
+    operator: UserAuthContext | None = None,
 ):
     pending = (await session.exec(
         select(PendingSpend).where(PendingSpend.request_id == request_id).with_for_update()
@@ -86,10 +153,16 @@ async def _resolve_pending(
     if not pending:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending request not found")
 
+    if operator is not None:
+        await ensure_operator_owns_agent(session, operator=operator, agent_id=pending.agent_id)
+
     try:
         ensure_pending_is_resolvable(pending)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    if payload.decision == "APPROVE":
+        await _reject_approval_if_stale(pending=pending, session=session, redis=redis)
 
     apply_resolution(pending, payload.decision, payload.resolver_id)
 
@@ -114,6 +187,7 @@ async def _resolve_pending(
             goal_drift_result=pending.verdict_snapshot.get("goal_drift_result", {}),
             verdict="SAFE",
             status="APPROVED_BY_HUMAN_EXECUTED",
+            engine_provenance=engine_provenance(),
         ))
         append_agent_activity(
             session,
@@ -142,6 +216,7 @@ async def _resolve_pending(
             goal_drift_result=pending.verdict_snapshot.get("goal_drift_result", {}),
             verdict="MALICIOUS",
             status="DENIED_BY_HUMAN",
+            engine_provenance=engine_provenance(),
         ))
         append_agent_activity(
             session,
@@ -161,22 +236,20 @@ async def _resolve_pending(
         session.add(notification)
 
     session.add(pending)
-    await session.commit()
-
-    if payload.decision == "APPROVE":
-        try:
-            await commit_budget_spend(
-                redis=redis,
-                agent_id=original.agent_id,
-                asset_type=original.asset_type,
-                amount_cents=original.amount_cents,
+    try:
+        await session.commit()
+    except Exception:
+        if payload.decision == "APPROVE":
+            await rollback_budget_reservation(
+                redis,
+                daily_budget_key(
+                    pending.agent_id,
+                    pending.payload_json["asset_type"],
+                    currency=pending.payload_json["currency"],
+                ),
+                pending.payload_json["amount_cents"],
             )
-        except Exception:
-            logger.critical(
-                "Budget commit failed after HITL approval — manual recovery required",
-                extra={"agent_id": original.agent_id, "amount_cents": original.amount_cents, "request_id": request_id},
-                exc_info=True,
-            )
+        raise
 
     # Push the verdict to the agent's callback URL (signed + retried) so it
     # doesn't have to poll. Runs after the response is sent; polling stays as
@@ -210,11 +283,12 @@ async def resolve_hitl_request(
     request_id: str,
     payload: HitlResolveRequest,
     background_tasks: BackgroundTasks,
-    _: None = Depends(verify_hitl_auth),
+    operator: UserAuthContext | None = Depends(verify_hitl_auth),
     session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
     return await _resolve_pending(
+        operator=operator,
         request_id=request_id,
         payload=payload,
         session=session,

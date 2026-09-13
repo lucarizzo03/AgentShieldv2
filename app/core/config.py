@@ -20,7 +20,36 @@ class Settings(BaseSettings):
     hitl_default_timeout_seconds: int = Field(default=600)
     loop_window_seconds: int = Field(default=60)
     loop_threshold: int = Field(default=5)
-    semantic_weak_suspicious_min_score: int = Field(default=50)
+    # Alignment score bands (0-100, higher = more aligned):
+    #   >= semantic_aligned_min_score         → ALIGNED  → safe
+    #   >= semantic_weak_suspicious_min_score → WEAK     → suspicious (HITL)
+    #   below                                 → MISMATCH → hard block
+    semantic_aligned_min_score: int = Field(default=75)
+    semantic_weak_suspicious_min_score: int = Field(default=45)
+    # A within_scope verdict the model is unsure about is not evidence of scope
+    # compliance; below this confidence Check D routes to a human instead.
+    goal_drift_min_confidence: int = Field(default=60)
+    # Deadlines around the Claude calls.  Anything slower than this degrades to
+    # HITL instead of holding a worker: a slow provider must not become latency
+    # for the calling agent.
+    anthropic_timeout_seconds: float = Field(default=8.0)
+    anthropic_max_retries: int = Field(default=1)
+    slm_deadline_seconds: float = Field(default=12.0)
+    # Consecutive failures before Checks C/D stop calling Anthropic and degrade
+    # straight to HITL, and how long that lasts before a single probe retries.
+    slm_breaker_failure_threshold: int = Field(default=5)
+    slm_breaker_cooldown_seconds: float = Field(default=30.0)
+    # How long an outstanding budget reservation stays discoverable, and how old
+    # it must be before the reconciler treats it as abandoned.
+    budget_reservation_marker_ttl_seconds: int = Field(default=900)
+    budget_reservation_grace_seconds: int = Field(default=120)
+    budget_reconcile_interval_seconds: int = Field(default=60)
+    # /metrics is unauthenticated only in dev; set a token to scrape it anywhere
+    # else, since the exposition leaks verdict mix and volume.
+    metrics_auth_token: str = Field(default="")
+    # Fraction of A/B hard-denies that still get evaluated by Checks C/D in
+    # shadow mode, recorded but never enforced.
+    shadow_eval_sample_rate: float = Field(default=0.1, ge=0.0, le=1.0)
     api_auth_header: str = Field(default="x-agent-key")
     signature_tolerance_seconds: int = Field(default=300)
     agent_hmac_secret: str = Field(default="dev-agent-hmac-secret-change-me")

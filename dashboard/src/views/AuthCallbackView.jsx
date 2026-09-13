@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { handleAuthCallback } from "../lib/auth";
+import AuthShell from "./AuthShell";
 
 export default function AuthCallbackView() {
   const location = useLocation();
@@ -17,36 +18,33 @@ export default function AuthCallbackView() {
       })
       .catch((err) => {
         if (!active) return;
-        setError(err.message || "Authentication failed");
+        setError(err.message || "Authentication failed.");
       });
     return () => {
       active = false;
     };
   }, [location.search, navigate]);
 
+  if (error) {
+    return (
+      <AuthShell label="SIGN IN — FAILED" title="Sign-in didn't complete" subtitle={error}>
+        <Link to="/auth" className="auth-btn" style={{ textDecoration: "none" }}>
+          Back to sign in
+        </Link>
+        <div className="auth-note">
+          If this keeps happening, confirm this callback URL is listed in the Auth0 application's allowed callback
+          URLs and that the API audience matches the dashboard configuration.
+        </div>
+      </AuthShell>
+    );
+  }
+
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "grid",
-        placeItems: "center",
-        background: "#0c0c0c",
-        color: "#ededed",
-      }}
-    >
-      <div style={{ textAlign: "center" }}>
-        {!error ? (
-          <>
-            <p style={{ margin: 0, fontSize: 18 }}>Completing sign-in...</p>
-            <p style={{ color: "#888", marginTop: 8 }}>Please wait while we verify your session.</p>
-          </>
-        ) : (
-          <>
-            <p style={{ margin: 0, fontSize: 18 }}>Sign-in failed</p>
-            <p style={{ color: "#ff7b7b", marginTop: 8 }}>{error}</p>
-          </>
-        )}
+    <AuthShell label="SIGN IN" title="Completing sign-in" subtitle="Exchanging your authorization code with Auth0.">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, color: "#a1a1a1", fontSize: 13 }}>
+        <span className="auth-spinner" />
+        This should only take a second.
       </div>
-    </div>
+    </AuthShell>
   );
 }

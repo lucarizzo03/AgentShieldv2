@@ -82,6 +82,10 @@ async def _latest_unique_transactions(
     )
     latest: dict[str, SpendAuditLog] = {}
     for row in today_rows:
+        # Requests rejected by schema validation were never evaluated, so they
+        # are not transactions and must not move block/approval rates.
+        if row.status == "VALIDATION_REJECTED":
+            continue
         if row.request_id not in latest or row.created_at > latest[row.request_id].created_at:
             latest[row.request_id] = row
     return sorted(latest.values(), key=lambda row: row.created_at, reverse=True)
@@ -102,19 +106,11 @@ async def _activity_rows(
         start_at=start_at,
         end_at=end_at,
     )
-    latest_non_replay: dict[str, SpendAuditLog] = {}
-    replay_rows: list[SpendAuditLog] = []
-
+    latest: dict[str, SpendAuditLog] = {}
     for row in today_rows:
-        is_replay = bool((row.quantitative_result or {}).get("idempotency_replay", False))
-        if is_replay:
-            replay_rows.append(row)
-            continue
-        if row.request_id not in latest_non_replay:
-            latest_non_replay[row.request_id] = row
-
-    merged = [*latest_non_replay.values(), *replay_rows]
-    return sorted(merged, key=lambda row: row.created_at, reverse=True)
+        if row.request_id not in latest:
+            latest[row.request_id] = row
+    return sorted(latest.values(), key=lambda row: row.created_at, reverse=True)
 
 
 @router.get("/dashboard/agents/{agent_id}/notifications", response_model=DashboardNotificationListResponse)
@@ -178,6 +174,7 @@ async def list_dashboard_notifications(
                     goal_drift_result=audit.goal_drift_result,
                     verdict=audit.verdict,
                     status="EXPIRED",
+                    engine_provenance=audit.engine_provenance,
                 ))
             pending = (await session.exec(
                 select(PendingSpend).where(PendingSpend.request_id == n.request_id)
@@ -288,7 +285,7 @@ async def list_agent_activity(
                 "policy_result": row.policy_result or {},
                 "semantic_result": row.semantic_result or {},
                 "goal_drift_result": row.goal_drift_result or {},
-                "idempotency_replay": bool((row.quantitative_result or {}).get("idempotency_replay", False)),
+                "idempotency_replay": (row.idempotency_replay_count or 0) > 0,
             }
             for row in rows
         ],
