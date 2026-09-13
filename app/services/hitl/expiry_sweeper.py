@@ -1,34 +1,46 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.core.metrics import increment
 from app.db.postgres import async_engine
+from app.db.redis import redis_client
 from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
+from app.policy.provenance import engine_provenance
 
 logger = logging.getLogger(__name__)
 
 _SWEEP_INTERVAL = 60
+_SWEEP_LOCK_KEY = "lock:hitl:expiry-sweeper"
 
 
 async def _sweep_once() -> int:
     """Expire overdue PendingSpend rows. Returns number of rows expired."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expired_count = 0
 
     async with AsyncSession(async_engine) as session:
+        # Lock the candidate rows and skip any a resolve is already holding, so
+        # the sweep cannot overwrite a resolution that commits mid-sweep.
         rows = (await session.exec(
             select(PendingSpend).where(
                 PendingSpend.state == "WAITING_HUMAN",
                 PendingSpend.expires_at <= now,
-            )
+            ).with_for_update(skip_locked=True)
         )).all()
 
         for pending in rows:
+            # Re-assert the state inside the locked transaction: the row may have
+            # been resolved between the query planning and the lock being granted.
+            await session.refresh(pending)
+            if pending.state != "WAITING_HUMAN":
+                continue
+
             pending.state = "EXPIRED"
             pending.resolved_at = now
             session.add(pending)
@@ -52,6 +64,7 @@ async def _sweep_once() -> int:
                 goal_drift_result=pending.verdict_snapshot.get("goal_drift_result", {}),
                 verdict="SUSPICIOUS",
                 status="EXPIRED",
+                engine_provenance=engine_provenance(),
             ))
 
             notification = (await session.exec(
@@ -70,6 +83,7 @@ async def _sweep_once() -> int:
             expired_count += 1
 
         if expired_count:
+            increment("hitl.expired", expired_count)
             await session.commit()
             logger.info("HITL expiry sweep: expired %d request(s)", expired_count)
 
@@ -77,12 +91,23 @@ async def _sweep_once() -> int:
 
 
 async def run_expiry_sweeper() -> None:
-    """Background task: sweep expired HITL requests every 60 seconds."""
+    """Background task: sweep expired HITL requests every 60 seconds.
+
+    The sweeper runs in every worker process, so each pass is guarded by a
+    short-lived Redis lock: only one worker sweeps, and the others skip rather
+    than racing to write duplicate EXPIRED audit rows.
+    """
     logger.info("HITL expiry sweeper started (interval=%ds)", _SWEEP_INTERVAL)
     while True:
         await asyncio.sleep(_SWEEP_INTERVAL)
         try:
-            count = await _sweep_once()
+            acquired = await redis_client.set(_SWEEP_LOCK_KEY, "1", ex=_SWEEP_INTERVAL, nx=True)
+            if not acquired:
+                continue
+            try:
+                count = await _sweep_once()
+            finally:
+                await redis_client.delete(_SWEEP_LOCK_KEY)
             if count:
                 logger.info("Expired %d stale HITL request(s)", count)
         except Exception:

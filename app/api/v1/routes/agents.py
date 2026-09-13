@@ -59,6 +59,7 @@ async def create_agent(
         per_txn_auto_approve_limit_cents=payload.per_transaction_limit_usd * 100 if payload.per_transaction_limit_usd > 0 else 100_000_000,
         hitl_required_over_cents=payload.auto_approve_under_usd * 100,
         blocked_vendors=payload.blocked_vendors,
+        allowed_vendors=payload.allowed_vendors,
         allowed_networks=payload.allowed_networks or ["base"],
         allowed_stablecoins=payload.allowed_tokens or ["USDC"],
         allowed_scopes=payload.allowed_scopes,
@@ -113,6 +114,7 @@ async def list_agents(
                 "per_transaction_limit_usd": _cents_to_usd_setting(a.per_txn_auto_approve_limit_cents),
                 "auto_approve_under_usd": int((a.hitl_required_over_cents or 0) // 100),
                 "blocked_vendors": a.blocked_vendors or [],
+                "allowed_vendors": a.allowed_vendors or [],
                 "allowed_networks": a.allowed_networks or [],
                 "allowed_tokens": a.allowed_stablecoins or [],
                 "allowed_scopes": a.allowed_scopes or [],
@@ -144,6 +146,7 @@ async def update_agent_settings(
     )
     agent.hitl_required_over_cents = payload.auto_approve_under_usd * 100
     agent.blocked_vendors = payload.blocked_vendors
+    agent.allowed_vendors = payload.allowed_vendors
     agent.allowed_networks = payload.allowed_networks or ["base"]
     agent.allowed_stablecoins = payload.allowed_tokens or ["USDC"]
     agent.allowed_scopes = payload.allowed_scopes

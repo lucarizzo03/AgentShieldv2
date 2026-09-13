@@ -22,19 +22,25 @@ from app.core.logging import configure_logging
 from app.db.postgres import async_engine, create_db_and_tables
 from app.models.agent import Agent
 from app.models.spend_audit_log import SpendAuditLog
+from app.services.budget_reconciler import run_budget_reconciler
 from app.services.hitl.expiry_sweeper import run_expiry_sweeper
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_db_and_tables()
-    sweeper = asyncio.create_task(run_expiry_sweeper())
+    background = [
+        asyncio.create_task(run_expiry_sweeper()),
+        asyncio.create_task(run_budget_reconciler()),
+    ]
     yield
-    sweeper.cancel()
-    try:
-        await sweeper
-    except asyncio.CancelledError:
-        pass
+    for task in background:
+        task.cancel()
+    for task in background:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 def create_app() -> FastAPI:
@@ -103,8 +109,11 @@ def create_app() -> FastAPI:
                                     policy_result={"validation_errors": encoded_errors},
                                     semantic_result={},
                                     goal_drift_result={},
-                                    verdict="MALICIOUS",
-                                    status="BLOCKED",
+                                    # A malformed request was never evaluated, so
+                                    # it is not a verdict: calling it MALICIOUS
+                                    # inflates the block rate with client bugs.
+                                    verdict="REJECTED",
+                                    status="VALIDATION_REJECTED",
                                 )
                             )
                             await session.commit()

@@ -82,8 +82,29 @@ class FakeRedis:
         keys = list(args[:numkeys])
         argv = list(args[numkeys:])
         key = keys[0]
-        if len(argv) == 3:
-            # _CHECK_AND_RESERVE_BUDGET: argv = [amount_cents, limit_cents, ttl_seconds]
+        if "DECRBY" in script:
+            # _RELEASE_BUDGET_RESERVATION: keys = [budget, marker], argv = [amount_cents]
+            await self.delete(keys[1])
+            if key not in self._values:
+                return 0
+            new_val = max(0, int(self._values[key]) - int(argv[0]))
+            self._counter[key] = new_val
+            self._values[key] = str(new_val)
+            return 1
+        if "DECR" in script:
+            # _RELEASE_VELOCITY_COUNTER: keys = [counter]
+            if key not in self._values:
+                return 0
+            new_val = int(self._values[key]) - 1
+            if new_val <= 0:
+                await self.delete(key)
+            else:
+                self._counter[key] = new_val
+                self._values[key] = str(new_val)
+            return 1
+        if len(argv) == 5:
+            # _CHECK_AND_RESERVE_BUDGET: keys = [budget, marker],
+            # argv = [amount_cents, limit_cents, ttl, marker_value, marker_ttl]
             amount = int(argv[0])
             limit = int(argv[1])
             current = int(self._values.get(key, 0))
@@ -93,6 +114,8 @@ class FakeRedis:
             new_val = current + amount
             self._counter[key] = new_val
             self._values[key] = str(new_val)
+            if int(argv[4]) > 0:
+                self._values[keys[1]] = str(argv[3])
             return [1, current, projected]
         else:
             # _INCR_WITH_TTL: argv = [ttl_seconds]
@@ -327,8 +350,9 @@ class TestSafePath:
                 select(SpendAuditLog).where(SpendAuditLog.agent_id == "test_agent_001")
                 .order_by(SpendAuditLog.created_at.asc())
             ).all()
-        assert len(logs) == 2, f"Expected 2 audit records with replay marker, got {len(logs)}"
-        assert logs[-1].quantitative_result.get("idempotency_replay") is True
+        assert len(logs) == 1, f"Replay must not create a second decision row, got {len(logs)}"
+        assert logs[0].idempotency_replay_count == 1
+        assert logs[0].last_replayed_at is not None
 
     def test_suspended_agent_is_rejected_before_checks(self):
         with Session(engine) as session:
@@ -372,8 +396,8 @@ class TestSafePath:
                 select(SpendAuditLog).where(SpendAuditLog.request_id == body["request_id"])
             ).first()
         assert log is not None
-        assert log.status == "BLOCKED"
-        assert log.verdict == "MALICIOUS"
+        assert log.status == "VALIDATION_REJECTED"
+        assert log.verdict == "REJECTED"
         assert log.policy_result.get("validation_errors")
 
 
@@ -579,7 +603,7 @@ class TestMaliciousPath:
         _reset_db()
         _seed_agent(daily_budget_limit_cents=1_000)
         date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        self.redis._values[f"budget:daily:test_agent_001:STABLECOIN:{date_key}"] = "900"
+        self.redis._values[f"budget:daily:test_agent_001:STABLECOIN:USD:{date_key}"] = "900"
         payload = {**_STABLECOIN, "amount_cents": 200, "idempotency_key": "mal-budget-001"}
         self._assert_blocked(self._send(payload), "BUDGET_DAILY_LIMIT_EXCEEDED")
 

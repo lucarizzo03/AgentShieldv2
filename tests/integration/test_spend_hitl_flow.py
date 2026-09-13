@@ -57,8 +57,29 @@ class FakeRedis:
         keys = list(args[:numkeys])
         argv = list(args[numkeys:])
         key = keys[0]
-        if len(argv) == 3:
-            # _CHECK_AND_RESERVE_BUDGET: argv = [amount_cents, limit_cents, ttl_seconds]
+        if "DECRBY" in script:
+            # _RELEASE_BUDGET_RESERVATION: keys = [budget, marker], argv = [amount_cents]
+            await self.delete(keys[1])
+            if key not in self._values:
+                return 0
+            new_val = max(0, int(self._values[key]) - int(argv[0]))
+            self._counter[key] = new_val
+            self._values[key] = str(new_val)
+            return 1
+        if "DECR" in script:
+            # _RELEASE_VELOCITY_COUNTER: keys = [counter]
+            if key not in self._values:
+                return 0
+            new_val = int(self._values[key]) - 1
+            if new_val <= 0:
+                await self.delete(key)
+            else:
+                self._counter[key] = new_val
+                self._values[key] = str(new_val)
+            return 1
+        if len(argv) == 5:
+            # _CHECK_AND_RESERVE_BUDGET: keys = [budget, marker],
+            # argv = [amount_cents, limit_cents, ttl, marker_value, marker_ttl]
             amount = int(argv[0])
             limit = int(argv[1])
             current = int(self._values.get(key, 0))
@@ -68,6 +89,8 @@ class FakeRedis:
             new_val = current + amount
             self._counter[key] = new_val
             self._values[key] = str(new_val)
+            if int(argv[4]) > 0:
+                self._values[keys[1]] = str(argv[3])
             return [1, current, projected]
         else:
             # _INCR_WITH_TTL: argv = [ttl_seconds]

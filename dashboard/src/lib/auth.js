@@ -1,6 +1,12 @@
 const AUTH_STORAGE_KEY = "agentshield_id_token";
 const PKCE_VERIFIER_KEY = "agentshield_pkce_verifier";
+const PKCE_STATE_KEY = "agentshield_pkce_state";
 const RETURN_TO_KEY = "agentshield_return_to";
+
+// A callback URL can be replayed by React StrictMode's double effect, a refresh
+// or a back navigation. Auth0 only honours an authorization code once, so the
+// exchange is deduplicated per code and its result replayed.
+const inFlightExchanges = new Map();
 
 function decodeJwtPayload(token) {
   try {
@@ -61,11 +67,20 @@ export function isTokenExpired(token, leewaySeconds = 30) {
   const payload = decodeJwtPayload(token);
   const exp = payload?.exp;
   if (typeof exp !== "number") {
-    // If we cannot verify expiry, keep behavior fail-open instead of logging users out.
-    return false;
+    return true;
   }
   const nowSeconds = Math.floor(Date.now() / 1000);
   return exp <= nowSeconds + leewaySeconds;
+}
+
+export function getSessionProfile() {
+  const payload = decodeJwtPayload(getIdToken() || "");
+  if (!payload) return null;
+  return {
+    sub: typeof payload.sub === "string" ? payload.sub : null,
+    email: typeof payload.email === "string" ? payload.email : null,
+    expiresAt: typeof payload.exp === "number" ? payload.exp : null,
+  };
 }
 
 export function isAuthenticated() {
@@ -75,7 +90,20 @@ export function isAuthenticated() {
 export function clearAuthSession() {
   localStorage.removeItem(AUTH_STORAGE_KEY);
   sessionStorage.removeItem(PKCE_VERIFIER_KEY);
+  sessionStorage.removeItem(PKCE_STATE_KEY);
   sessionStorage.removeItem(RETURN_TO_KEY);
+}
+
+export function missingAuthConfigKeys() {
+  const cfg = getAuthConfig();
+  return [
+    ["VITE_AUTH0_DOMAIN", cfg.domain],
+    ["VITE_AUTH0_CLIENT_ID", cfg.clientId],
+    ["VITE_AUTH0_AUDIENCE", cfg.audience],
+    ["VITE_AUTH0_REDIRECT_URI", cfg.redirectUri],
+  ]
+    .filter(([, value]) => !value)
+    .map(([name]) => name);
 }
 
 export async function startLogin({ returnTo = "/app" } = {}) {
@@ -88,6 +116,7 @@ export async function startLogin({ returnTo = "/app" } = {}) {
   const state = randomString(24);
 
   sessionStorage.setItem(PKCE_VERIFIER_KEY, verifier);
+  sessionStorage.setItem(PKCE_STATE_KEY, state);
   sessionStorage.setItem(RETURN_TO_KEY, returnTo);
 
   const authorize = new URL(`${cfg.domain}/authorize`);
@@ -103,7 +132,6 @@ export async function startLogin({ returnTo = "/app" } = {}) {
 }
 
 export async function handleAuthCallback(search) {
-  const cfg = getAuthConfig();
   const params = new URLSearchParams(search);
   const code = params.get("code");
   const error = params.get("error");
@@ -112,11 +140,27 @@ export async function handleAuthCallback(search) {
     throw new Error(errorDescription || error);
   }
   if (!code) {
-    throw new Error("Authorization code missing.");
+    throw new Error("Authorization code missing from the Auth0 redirect.");
   }
+  const pending = inFlightExchanges.get(code);
+  if (pending) return pending;
+
+  const exchange = exchangeCodeForToken(code, params.get("state"));
+  inFlightExchanges.set(code, exchange);
+  exchange.catch(() => inFlightExchanges.delete(code));
+  return exchange;
+}
+
+async function exchangeCodeForToken(code, returnedState) {
+  const cfg = getAuthConfig();
   const verifier = sessionStorage.getItem(PKCE_VERIFIER_KEY);
-  if (!verifier) {
-    throw new Error("Missing PKCE verifier.");
+  const expectedState = sessionStorage.getItem(PKCE_STATE_KEY);
+  if (!verifier || !expectedState) {
+    throw new Error("This sign-in link is no longer valid. Start over from the sign-in page.");
+  }
+  if (returnedState !== expectedState) {
+    clearAuthSession();
+    throw new Error("Sign-in state did not match. Start over from the sign-in page.");
   }
 
   const tokenPayload = {
@@ -133,23 +177,38 @@ export async function handleAuthCallback(search) {
     body: JSON.stringify(tokenPayload),
   });
   if (!response.ok) {
-    throw new Error(`Token exchange failed (${response.status})`);
+    const detail = await response.json().catch(() => null);
+    throw new Error(
+      detail?.error_description || `Auth0 rejected the token exchange (${response.status}).`
+    );
   }
   const data = await response.json();
   const accessToken = data.access_token;
   if (!accessToken) {
-    throw new Error("No access_token returned from Auth0.");
+    throw new Error("Auth0 returned no access token. Check the API audience configuration.");
+  }
+  if (isTokenExpired(accessToken, 0)) {
+    throw new Error("Auth0 returned a token this dashboard cannot read. Check the API audience configuration.");
   }
   localStorage.setItem(AUTH_STORAGE_KEY, accessToken);
 
   const returnTo = sessionStorage.getItem(RETURN_TO_KEY) || "/app";
   sessionStorage.removeItem(PKCE_VERIFIER_KEY);
+  sessionStorage.removeItem(PKCE_STATE_KEY);
   sessionStorage.removeItem(RETURN_TO_KEY);
   return returnTo;
 }
 
+export function devAuthToken() {
+  if (String(import.meta.env.VITE_ENABLE_DEV_AUTH || "false").toLowerCase() !== "true") return "";
+  return import.meta.env.VITE_DEV_USER_TOKEN || "";
+}
+
 export function loginWithDevToken() {
-  const token = import.meta.env.VITE_DEV_USER_TOKEN || "dev-user-token";
+  const token = devAuthToken();
+  if (!token) {
+    throw new Error("Set VITE_DEV_USER_TOKEN to a token the API accepts to use a local dev session.");
+  }
   localStorage.setItem(AUTH_STORAGE_KEY, token);
   window.location.assign("/app");
 }

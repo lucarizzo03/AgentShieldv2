@@ -1,6 +1,6 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import App from "./App";
 import "./index.css";
 import { isAuthenticated } from "./lib/auth";
@@ -9,8 +9,10 @@ import AuthView from "./views/AuthView";
 import LandingView from "./views/LandingView";
 
 function RequireAuth({ children }) {
+  const location = useLocation();
   if (!isAuthenticated()) {
-    return <Navigate to="/auth" replace />;
+    const returnTo = `${location.pathname}${location.search}`;
+    return <Navigate to={`/auth?returnTo=${encodeURIComponent(returnTo)}`} replace />;
   }
   return children;
 }

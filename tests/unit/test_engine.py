@@ -4,6 +4,7 @@ import pytest
 import pytest_asyncio
 from redis.asyncio import Redis
 
+from app.core.config import get_settings
 from app.models.agent import Agent
 from app.policy.checks.quantitative import transaction_fingerprint
 from app.policy.engine import run_financial_triangulation
@@ -27,6 +28,13 @@ async def redis():
 @pytest.fixture
 def semantic():
     return AnthropicSemanticClient()
+
+
+@pytest.fixture(autouse=True)
+def _no_shadow_eval(monkeypatch):
+    """Shadow evaluation is sampled, so hard-deny assertions about empty
+    semantic/goal-drift results only hold with sampling off."""
+    monkeypatch.setattr(get_settings(), "shadow_eval_sample_rate", 0.0, raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +108,7 @@ async def test_engine_safe_verdict(redis, semantic) -> None:
 @pytest.mark.asyncio
 async def test_engine_quant_budget_exceeded_hard_deny(redis, semantic) -> None:
     agent = _agent("e2e-budget-01", daily_budget_limit_cents=100)
-    budget_key = f"budget:daily:{agent.agent_id}:FIAT:{TODAY}"
+    budget_key = f"budget:daily:{agent.agent_id}:FIAT:USD:{TODAY}"
     await redis.set(budget_key, 100, ex=3600)
 
     result = await run_financial_triangulation(
@@ -285,19 +293,18 @@ async def test_engine_policy_destination_denylisted_hard_deny(redis, semantic) -
 
 
 # ---------------------------------------------------------------------------
-# Policy — amount over threshold (hard deny, semantic skipped)
+# Policy — amount over threshold (escalates to a human, not a denial)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_engine_policy_amount_over_threshold_hard_deny(redis, semantic) -> None:
-    agent = _agent("e2e-thresh-01", per_txn_auto_approve_limit_cents=100)
+async def test_engine_policy_amount_over_threshold_escalates(redis, semantic) -> None:
+    agent = _agent("e2e-thresh-01", per_txn_auto_approve_limit_cents=10_000)
     result = await run_financial_triangulation(
         redis=redis, semantic_client=semantic, agent=agent,
-        **_kwargs(amount_cents=200),
+        **_kwargs(amount_cents=20_000),
     )
-    assert result.verdict == "MALICIOUS"
+    assert result.verdict == "SUSPICIOUS"
     assert "AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD" in result.reasons
-    assert result.semantic_result == {}
 
 
 # ---------------------------------------------------------------------------
