@@ -1,73 +1,96 @@
-import { Link } from "react-router-dom";
+import { useState } from "react";
+import { Navigate, useSearchParams } from "react-router-dom";
 
-import { isAuthConfigured, loginWithDevToken, startLogin } from "../lib/auth";
+import {
+  devAuthToken,
+  isAuthenticated,
+  isAuthConfigured,
+  loginWithDevToken,
+  missingAuthConfigKeys,
+  startLogin,
+} from "../lib/auth";
+import AuthShell from "./AuthShell";
+
+function safeReturnTo(raw) {
+  // Only same-origin paths, so a crafted ?returnTo cannot bounce the user off-site.
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/app";
+  if (raw.startsWith("/auth")) return "/app";
+  return raw;
+}
 
 export default function AuthView() {
+  const [params] = useSearchParams();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+
+  const returnTo = safeReturnTo(params.get("returnTo"));
   const authConfigured = isAuthConfigured();
-  const enableDevAuth = String(import.meta.env.VITE_ENABLE_DEV_AUTH || "false").toLowerCase() === "true";
+  const missingKeys = missingAuthConfigKeys();
+  const devToken = devAuthToken();
+
+  if (isAuthenticated()) {
+    return <Navigate to={returnTo} replace />;
+  }
+
+  async function onLogin() {
+    setError("");
+    setPending(true);
+    try {
+      await startLogin({ returnTo });
+    } catch (err) {
+      setPending(false);
+      setError(err.message || "Could not start sign-in.");
+    }
+  }
+
+  function onDevLogin() {
+    setError("");
+    try {
+      loginWithDevToken();
+    } catch (err) {
+      setError(err.message || "Could not start a local dev session.");
+    }
+  }
+
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "grid",
-        placeItems: "center",
-        background: "#0c0c0c",
-        color: "#ededed",
-        padding: 24,
-      }}
+    <AuthShell
+      label="SIGN IN"
+      title="Sign in to AgentShield"
+      subtitle="Auth0 handles the login. Your agents, spend activity, and approval queue live behind it."
+      footer={
+        <p className="auth-mono" style={{ margin: 0, fontSize: 11, color: "#3d3d3d", letterSpacing: "0.06em" }}>
+          AUTHORIZATION CODE + PKCE
+        </p>
+      }
     >
-      <div style={{ width: "100%", maxWidth: 420, border: "1px solid #222", background: "#111", padding: 20 }}>
-        <h1 style={{ margin: 0, marginBottom: 6, fontSize: 24 }}>Sign in to AgentShield</h1>
-        <p style={{ marginTop: 0, marginBottom: 18, color: "#888", fontSize: 14 }}>
-          Sign in with Auth0 to access your agents and dashboard activity.
-        </p>
-        {!authConfigured ? (
-          <div style={{ border: "1px solid #4a2", background: "#131a12", color: "#d7ffd2", padding: 10, fontSize: 13 }}>
-            Auth0 is not configured. Set `VITE_AUTH0_DOMAIN`, `VITE_AUTH0_CLIENT_ID`, `VITE_AUTH0_AUDIENCE`,
-            and `VITE_AUTH0_REDIRECT_URI` in dashboard variables.
-          </div>
-        ) : null}
-        <button
-          type="button"
-          onClick={() => startLogin()}
-          disabled={!authConfigured}
-          style={{
-            width: "100%",
-            height: 38,
-            marginTop: 8,
-            border: "1px solid #ededed",
-            background: "#ededed",
-            color: "#0c0c0c",
-            fontFamily: "Geist Mono, monospace",
-            cursor: authConfigured ? "pointer" : "not-allowed",
-          }}
-        >
-          Continue with Auth0
+      {error ? <div className="auth-note auth-note-bad">{error}</div> : null}
+
+      {!authConfigured ? (
+        <div className="auth-note">
+          Auth0 is not configured for this deployment. Missing{" "}
+          <span className="auth-mono" style={{ color: "#ededed" }}>
+            {missingKeys.join(", ")}
+          </span>
+          .
+        </div>
+      ) : null}
+
+      <button type="button" className="auth-btn" onClick={onLogin} disabled={!authConfigured || pending}>
+        {pending ? (
+          <>
+            <span className="auth-spinner" style={{ marginRight: 10 }} />
+            Redirecting to Auth0
+          </>
+        ) : (
+          "Continue with Auth0"
+        )}
+      </button>
+
+      {devToken ? (
+        <button type="button" className="auth-btn-ghost" onClick={onDevLogin}>
+          Use local dev session
         </button>
-        {enableDevAuth ? (
-          <button
-            type="button"
-            onClick={loginWithDevToken}
-            style={{
-              width: "100%",
-              height: 34,
-              marginTop: 10,
-              border: "1px solid #2f4f2f",
-              background: "#132013",
-              color: "#d6f5d6",
-              fontFamily: "Geist Mono, monospace",
-              cursor: "pointer",
-            }}
-          >
-            Use Local Dev Session
-          </button>
-        ) : null}
-        <p style={{ marginTop: 16, color: "#888", fontSize: 13 }}>
-          <Link to="/" style={{ color: "#ccc" }}>
-            Back to landing
-          </Link>
-        </p>
-      </div>
-    </div>
+      ) : null}
+    </AuthShell>
   );
 }

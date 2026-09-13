@@ -9,25 +9,47 @@ export function authHeaders(agentId, extra = {}) {
   };
 }
 
+const SESSION_EXPIRED_MESSAGE = "Session expired. Please sign in again.";
+let redirectingToLogin = false;
+
+// Several widgets load in parallel, so an expired session produces a burst of
+// 401s. Only the first one navigates; the rest just reject.
+function redirectToLogin() {
+  clearAuthSession();
+  if (!redirectingToLogin) {
+    redirectingToLogin = true;
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    const suffix = returnTo && returnTo !== "/auth" ? `?returnTo=${encodeURIComponent(returnTo)}` : "";
+    window.location.assign(`/auth${suffix}`);
+  }
+  return new Error(SESSION_EXPIRED_MESSAGE);
+}
+
 async function request(path, options = {}) {
   const { authMode = "user", headers = {}, ...rest } = options;
   const finalHeaders = { ...headers };
   if (authMode === "user") {
     const token = getIdToken();
     if (isTokenExpired(token)) {
-      clearAuthSession();
-      window.location.assign("/auth");
-      throw new Error("Session expired. Please sign in again.");
+      throw redirectToLogin();
     }
-    if (token && !finalHeaders.Authorization) {
+    if (!finalHeaders.Authorization) {
       finalHeaders.Authorization = `Bearer ${token}`;
     }
   }
-  const response = await fetch(`${API_BASE}${path}`, { ...rest, headers: finalHeaders });
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, { ...rest, headers: finalHeaders });
+  } catch {
+    throw new Error("Cannot reach the AgentShield API. Check that the backend is running.");
+  }
   if (response.status === 401 && authMode === "user") {
-    clearAuthSession();
-    window.location.assign("/auth");
-    throw new Error("Session expired. Please sign in again.");
+    throw redirectToLogin();
+  }
+  if (response.status === 503) {
+    // Identity provider or a dependency is down — not a dead session, so the
+    // user keeps their token instead of being bounced to the login page.
+    throw new Error("AgentShield is temporarily unavailable. Try again in a moment.");
   }
   if (!response.ok) {
     let message = `Request failed: ${response.status}`;
@@ -113,14 +135,13 @@ export async function bootstrapOnboarding(payload) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-    authMode: "none",
+    authMode: "user",
   });
 }
 
 export async function getOnboardingChecklist(agentId) {
   return request(`/onboarding/agents/${agentId}/checklist`, {
-    headers: authHeaders(agentId),
-    authMode: "none",
+    authMode: "user",
   });
 }
 
