@@ -149,14 +149,25 @@ async def run_quantitative_checks(
     return check
 
 
-async def commit_budget_spend(redis: Redis, agent_id: str, asset_type: str, amount_cents: int) -> None:
-    """Full budget commit (INCRBY + TTL).  Used by the HITL APPROVE path where
-    the earlier tentative reservation was rolled back before the human decision."""
+async def commit_budget_spend(
+    redis: Redis,
+    agent_id: str,
+    asset_type: str,
+    amount_cents: int,
+    daily_budget_limit_cents: int,
+) -> tuple[bool, int]:
+    """Full budget commit, used by the HITL APPROVE path where the earlier
+    tentative reservation was rolled back before the human decision.
+
+    The limit is re-checked atomically: an approval that arrives hours later
+    must not push the agent past the budget it has spent in the meantime.
+    Returns ``(committed, spend_before)``."""
     budget_key = daily_budget_key(agent_id, asset_type)
-    async with redis.pipeline() as pipe:
-        pipe.incrby(budget_key, amount_cents)
-        pipe.expire(budget_key, seconds_until_next_utc_midnight())
-        await pipe.execute()
+    result = await redis.eval(
+        _CHECK_AND_RESERVE_BUDGET, 1, budget_key,
+        amount_cents, daily_budget_limit_cents, seconds_until_next_utc_midnight(),
+    )
+    return bool(int(result[0])), int(result[1])
 
 
 async def finalize_budget_reservation(redis: Redis, budget_key: str) -> None:

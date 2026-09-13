@@ -7,6 +7,9 @@ import pytest
 import pytest_asyncio
 from redis.asyncio import Redis
 
+from app.core.config import get_settings
+from app.models.agent import Agent
+from app.policy.checks.policy_db import run_policy_checks
 from app.policy.checks.quantitative import (
     daily_budget_key,
     rollback_budget_reservation,
@@ -193,3 +196,78 @@ async def test_rollback_targets_the_reserved_day_not_today(redis) -> None:
     assert int(await redis.get(today_key)) == 700
 
     await redis.delete(reserved_key, today_key)
+
+
+# ---------------------------------------------------------------------------
+# Semantic thresholds come from settings, not hardcoded constants
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_semantic_bands_follow_configured_thresholds(monkeypatch) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "semantic_aligned_min_score", 90, raising=True)
+    monkeypatch.setattr(settings, "semantic_weak_suspicious_min_score", 70, raising=True)
+
+    # Alignment 80: safe under the defaults, only WEAK under the tightened config.
+    weak = await _semantic({"risk_score": 20, "reason_codes": []})
+    assert weak.context["alignment_label"] == "WEAK"
+    assert weak.suspicious is True
+
+    aligned = await _semantic({"risk_score": 5, "reason_codes": []})
+    assert aligned.context["alignment_label"] == "ALIGNED"
+    assert aligned.context["thresholds"] == {"aligned_min": 90, "weak_min": 70}
+
+    mismatch = await _semantic({"risk_score": 40, "reason_codes": []})
+    assert mismatch.context["alignment_label"] == "MISMATCH"
+    assert mismatch.hard_deny is True
+
+
+# ---------------------------------------------------------------------------
+# Amount over the HITL threshold is a review trigger, not a hard denial
+# ---------------------------------------------------------------------------
+
+def _policy_agent(**kwargs) -> Agent:
+    defaults = {
+        "agent_id": "agent-threshold-01",
+        "daily_budget_limit_cents": 100_000,
+        "per_txn_auto_approve_limit_cents": 10_000,
+        "blocked_vendors": [],
+        "allowed_stablecoins": ["USDC"],
+        "allowed_networks": ["base"],
+        "allowed_destination_addresses": [],
+        "blocked_destination_addresses": [],
+    }
+    defaults.update(kwargs)
+    return Agent(**defaults)
+
+
+def _policy(agent: Agent, amount_cents: int):
+    return run_policy_checks(
+        agent=agent,
+        amount_cents=amount_cents,
+        vendor_url_or_name="delta.com",
+        asset_type="FIAT",
+        stablecoin_symbol=None,
+        network=None,
+        destination_address=None,
+    )
+
+
+def test_amount_over_hitl_threshold_is_suspicious_not_hard_deny() -> None:
+    check = _policy(_policy_agent(hitl_required_over_cents=5_000), 20_000)
+    assert check.hard_deny is False
+    assert check.suspicious is True
+    assert "AMOUNT_OVER_AUTO_APPROVAL_THRESHOLD" in check.reasons
+
+
+def test_amount_over_auto_approve_limit_is_suspicious_not_hard_deny() -> None:
+    check = _policy(_policy_agent(), 20_000)
+    assert check.hard_deny is False
+    assert check.suspicious is True
+
+
+def test_amount_within_threshold_is_clean() -> None:
+    check = _policy(_policy_agent(hitl_required_over_cents=5_000), 4_000)
+    assert check.hard_deny is False
+    assert check.suspicious is False
+    assert "AMOUNT_WITHIN_AUTO_APPROVAL_THRESHOLD" in check.reasons

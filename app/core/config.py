@@ -20,7 +20,12 @@ class Settings(BaseSettings):
     hitl_default_timeout_seconds: int = Field(default=600)
     loop_window_seconds: int = Field(default=60)
     loop_threshold: int = Field(default=5)
-    semantic_weak_suspicious_min_score: int = Field(default=50)
+    # Alignment score bands (0-100, higher = more aligned):
+    #   >= semantic_aligned_min_score         → ALIGNED  → safe
+    #   >= semantic_weak_suspicious_min_score → WEAK     → suspicious (HITL)
+    #   below                                 → MISMATCH → hard block
+    semantic_aligned_min_score: int = Field(default=75)
+    semantic_weak_suspicious_min_score: int = Field(default=45)
     api_auth_header: str = Field(default="x-agent-key")
     signature_tolerance_seconds: int = Field(default=300)
     agent_hmac_secret: str = Field(default="dev-agent-hmac-secret-change-me")
