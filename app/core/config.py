@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     #   below                                 → MISMATCH → hard block
     semantic_aligned_min_score: int = Field(default=75)
     semantic_weak_suspicious_min_score: int = Field(default=45)
+    # A within_scope verdict the model is unsure about is not evidence of scope
+    # compliance; below this confidence Check D routes to a human instead.
+    goal_drift_min_confidence: int = Field(default=60)
     # Deadlines around the Claude calls.  Anything slower than this degrades to
     # HITL instead of holding a worker: a slow provider must not become latency
     # for the calling agent.

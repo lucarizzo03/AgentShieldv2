@@ -10,6 +10,7 @@ from app.db.redis import redis_client
 from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
+from app.policy.provenance import engine_provenance
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ async def _sweep_once() -> int:
                 goal_drift_result=pending.verdict_snapshot.get("goal_drift_result", {}),
                 verdict="SUSPICIOUS",
                 status="EXPIRED",
+                engine_provenance=engine_provenance(),
             ))
 
             notification = (await session.exec(
