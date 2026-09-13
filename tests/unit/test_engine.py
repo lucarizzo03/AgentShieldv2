@@ -100,7 +100,7 @@ async def test_engine_safe_verdict(redis, semantic) -> None:
 @pytest.mark.asyncio
 async def test_engine_quant_budget_exceeded_hard_deny(redis, semantic) -> None:
     agent = _agent("e2e-budget-01", daily_budget_limit_cents=100)
-    budget_key = f"budget:daily:{agent.agent_id}:FIAT:{TODAY}"
+    budget_key = f"budget:daily:{agent.agent_id}:FIAT:USD:{TODAY}"
     await redis.set(budget_key, 100, ex=3600)
 
     result = await run_financial_triangulation(

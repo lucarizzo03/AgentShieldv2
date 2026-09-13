@@ -55,6 +55,7 @@ async def run_financial_triangulation(
     network: str | None,
     destination_address: str | None,
     fingerprint: str,
+    currency: str | None = None,
     reservation_id: str | None = None,
 ) -> TriangulationResult:
     """``fingerprint`` keys the loop check, so callers should pass the velocity
@@ -78,6 +79,7 @@ async def run_financial_triangulation(
         stablecoin_symbol=stablecoin_symbol,
         network=network,
         destination_address=destination_address,
+        currency=currency,
     )
 
     if quantitative.hard_deny or policy.hard_deny:
