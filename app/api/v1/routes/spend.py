@@ -28,7 +28,11 @@ from app.policy.checks.quantitative import (
 from app.policy.engine import run_financial_triangulation
 from app.services.activity_log import append_agent_activity
 from app.services.hitl.notifier import HitlNotifier
-from app.services.idempotency import cache_idempotent_response, read_cached_idempotent_response
+from app.services.idempotency import (
+    cache_idempotent_response,
+    claim_idempotency_slot,
+    release_idempotency_slot,
+)
 from app.services.slm.client import AnthropicSemanticClient
 
 logger = logging.getLogger(__name__)
@@ -39,6 +43,7 @@ _HIGH_RISK_REASONS = {
     "DESTINATION_BURST_DETECTED",
     "VENDOR_DOMAIN_PHISHING_PATTERN",
     "SEMANTIC_MISMATCH_HIGH",
+    "SEMANTIC_EVAL_UNAVAILABLE",
     "GOAL_DRIFT_DETECTED",
     "GOAL_DRIFT_EVAL_UNAVAILABLE",
 }
@@ -67,6 +72,7 @@ _CHECK_REASON_GROUPS = {
         "SEMANTIC_MISMATCH_HIGH",
         "SEMANTIC_ALIGNMENT_WEAK",
         "SEMANTIC_ALIGNMENT_HIGH",
+        "SEMANTIC_EVAL_UNAVAILABLE",
     },
     "check_d_goal_drift": {
         "GOAL_DRIFT_DETECTED",
@@ -191,8 +197,34 @@ async def spend_request(
     if agent.status != "ACTIVE":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Agent is not active")
 
-    cached = await read_cached_idempotent_response(redis, payload.agent_id, payload.idempotency_key)
-    if cached:
+    fingerprint = transaction_fingerprint(
+        vendor=payload.vendor_url_or_name,
+        amount_cents=payload.amount_cents,
+        item_description=payload.item_description,
+        asset_type=payload.asset_type,
+        stablecoin_symbol=payload.stablecoin_symbol,
+        network=payload.network,
+        destination_address=payload.destination_address,
+    )
+
+    occupied = await claim_idempotency_slot(redis, payload.agent_id, payload.idempotency_key, fingerprint)
+    if occupied is not None:
+        if occupied.fingerprint is not None and occupied.fingerprint != fingerprint:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Idempotency key was already used for a different transaction. "
+                    "Use a new key for a new transaction."
+                ),
+            )
+        if occupied.state == "in_flight":
+            response.headers["retry-after"] = "2"
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="An identical request is still being evaluated. Retry shortly.",
+            )
+
+        cached = occupied.response or {}
         response.status_code = int(cached.get("_http_status", 200))
         replay_body = dict(cached["body"])
         replay_body["idempotency_replay"] = True
@@ -204,17 +236,32 @@ async def spend_request(
             response.headers["x-original-request-id"] = str(replay_body["request_id"])
         return replay_body
 
-    request_id = f"req_{uuid4().hex[:18]}"
-    fingerprint = transaction_fingerprint(
-        vendor=payload.vendor_url_or_name,
-        amount_cents=payload.amount_cents,
-        item_description=payload.item_description,
-        asset_type=payload.asset_type,
-        stablecoin_symbol=payload.stablecoin_symbol,
-        network=payload.network,
-        destination_address=payload.destination_address,
-    )
+    try:
+        return await _decide_spend(
+            payload=payload,
+            response=response,
+            agent=agent,
+            session=session,
+            redis=redis,
+            fingerprint=fingerprint,
+        )
+    except Exception:
+        # Never leave a claimed slot behind on failure — the agent must be able
+        # to retry the same key immediately.
+        await release_idempotency_slot(redis, payload.agent_id, payload.idempotency_key)
+        raise
 
+
+async def _decide_spend(
+    *,
+    payload: SpendRequest,
+    response: Response,
+    agent: Agent,
+    session: AsyncSession,
+    redis: Redis,
+    fingerprint: str,
+) -> dict:
+    request_id = f"req_{uuid4().hex[:18]}"
     settings = get_settings()
     tri = await run_financial_triangulation(
         redis=redis,
@@ -270,7 +317,7 @@ async def spend_request(
         try:
             if tri.quantitative_result.get("budget_reserved", False):
                 # Reservation was made atomically during the budget check — just refresh TTL.
-                await finalize_budget_reservation(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
+                await finalize_budget_reservation(redis, tri.quantitative_result["budget_key"])
             else:
                 await commit_budget_spend(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
         except Exception:
@@ -290,7 +337,9 @@ async def spend_request(
             "idempotency_replay": False,
             "idempotency_note": None,
         }
-        await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 200, "body": body})
+        await cache_idempotent_response(
+            redis, payload.agent_id, payload.idempotency_key, {"_http_status": 200, "body": body}, fingerprint
+        )
         return body
 
     if tri.verdict == "MALICIOUS":
@@ -330,7 +379,9 @@ async def spend_request(
         await session.commit()
         if tri.quantitative_result.get("budget_reserved", False):
             try:
-                await rollback_budget_reservation(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
+                await rollback_budget_reservation(
+                    redis, tri.quantitative_result["budget_key"], payload.amount_cents
+                )
             except Exception:
                 logger.error(
                     "Budget rollback failed after MALICIOUS verdict",
@@ -349,7 +400,9 @@ async def spend_request(
             "idempotency_note": None,
         }
         response.status_code = status.HTTP_403_FORBIDDEN
-        await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 403, "body": body})
+        await cache_idempotent_response(
+            redis, payload.agent_id, payload.idempotency_key, {"_http_status": 403, "body": body}, fingerprint
+        )
         return body
 
     increment("spend.verdict.suspicious")
@@ -439,7 +492,9 @@ async def spend_request(
     await session.commit()
     if tri.quantitative_result.get("budget_reserved", False):
         try:
-            await rollback_budget_reservation(redis, payload.agent_id, payload.asset_type, payload.amount_cents)
+            await rollback_budget_reservation(
+                redis, tri.quantitative_result["budget_key"], payload.amount_cents
+            )
         except Exception:
             logger.error(
                 "Budget rollback failed after SUSPICIOUS verdict",
@@ -472,7 +527,9 @@ async def spend_request(
         "idempotency_note": None,
     }
     response.status_code = status.HTTP_202_ACCEPTED
-    await cache_idempotent_response(redis, payload.agent_id, payload.idempotency_key, {"_http_status": 202, "body": body})
+    await cache_idempotent_response(
+        redis, payload.agent_id, payload.idempotency_key, {"_http_status": 202, "body": body}, fingerprint
+    )
     return body
 
 

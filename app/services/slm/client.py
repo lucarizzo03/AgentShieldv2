@@ -157,10 +157,20 @@ class AnthropicSemanticClient:
                     return parsed
 
             logger.warning("SLM returned unexpected format: %s", raw[:200])
-            return {"alignment_label": "WEAK", "risk_score": 55, "reason_codes": ["SLM_UNEXPECTED_RESPONSE"]}
+            return {
+                "alignment_label": None,
+                "risk_score": None,
+                "reason_codes": ["SLM_UNEXPECTED_RESPONSE"],
+                "evaluation_error": True,
+            }
         except Exception:
             logger.warning("SLM call failed", exc_info=True)
-            return {"alignment_label": "WEAK", "risk_score": 55, "reason_codes": ["SLM_UNAVAILABLE"]}
+            return {
+                "alignment_label": None,
+                "risk_score": None,
+                "reason_codes": ["SLM_UNAVAILABLE"],
+                "evaluation_error": True,
+            }
 
     async def goal_scope_check(
         self,
