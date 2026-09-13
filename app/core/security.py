@@ -35,6 +35,9 @@ class UserAuthContext:
     claims: dict[str, Any] = field(default_factory=dict)
 
 
+JWKS_FETCH_TIMEOUT_SECONDS = 5
+
+
 def _normalize_signature(signature: str) -> str:
     return signature.removeprefix("sha256=").strip().lower()
 
@@ -82,7 +85,11 @@ def _auth0_issuer() -> str:
 
 @lru_cache(maxsize=1)
 def _auth0_jwks_client(issuer: str) -> jwt.PyJWKClient:
-    return jwt.PyJWKClient(f"{issuer.rstrip('/')}/.well-known/jwks.json")
+    return jwt.PyJWKClient(
+        f"{issuer.rstrip('/')}/.well-known/jwks.json",
+        cache_keys=True,
+        timeout=JWKS_FETCH_TIMEOUT_SECONDS,
+    )
 
 
 def _verify_auth0_bearer(token: str) -> UserAuthContext:
@@ -102,6 +109,16 @@ def _verify_auth0_bearer(token: str) -> UserAuthContext:
             audience=settings.auth0_audience,
             issuer=issuer,
         )
+    except jwt.PyJWKClientError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to reach the identity provider; retry shortly",
+        ) from exc
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Auth0 token has expired",
+        ) from exc
     except jwt.InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -155,6 +172,13 @@ async def _assert_agent_owned_by_subject(session: AsyncSession, *, agent_id: str
             detail="Authenticated user does not own this agent",
         )
     return agent
+
+
+async def ensure_operator_owns_agent(
+    session: AsyncSession, *, operator: UserAuthContext, agent_id: str
+) -> Agent:
+    """Authorize an Auth0 operator to act on a specific agent."""
+    return await _assert_agent_owned_by_subject(session, agent_id=agent_id, auth_subject=operator.sub)
 
 
 async def ensure_agent_access(session: AsyncSession, auth_context: AuthContext, agent_id: str) -> None:
@@ -270,12 +294,16 @@ async def verify_hitl_auth(
     authorization: str | None = Header(default=None),
     x_webhook_signature: str | None = Header(default=None),
     x_webhook_timestamp: str | None = Header(default=None),
-) -> None:
-    """Accept either Auth0 Bearer (dashboard operators) or webhook HMAC (external integrations)."""
+) -> UserAuthContext | None:
+    """Accept either Auth0 Bearer (dashboard operators) or webhook HMAC (external integrations).
+
+    Returns the operator context for Auth0 callers so the route can authorize
+    them against the agent that owns the pending request; webhook callers are
+    already scoped by the shared secret and return ``None``.
+    """
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        await run_in_threadpool(_verify_auth0_bearer, token)
-        return
+        return await run_in_threadpool(_verify_auth0_bearer, token)
 
     if x_webhook_signature and x_webhook_timestamp:
         settings = get_settings()
@@ -294,7 +322,7 @@ async def verify_hitl_auth(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid webhook signature",
             )
-        return
+        return None
 
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
