@@ -22,13 +22,13 @@ def _seed_owned_agent() -> None:
         session.add(
             User(
                 id=owner_id,
-                auth_subject="auth0|victim",
+                auth_subject="cognito-sub-victim",
                 email="victim@example.com",
             )
         )
         session.add(
             User(
-                auth_subject="auth0|attacker",
+                auth_subject="cognito-sub-attacker",
                 email="attacker@example.com",
             )
         )
@@ -70,7 +70,7 @@ def _spend_body(agent_id: str) -> bytes:
 
 
 def _mock_bearer(sub: str) -> None:
-    security._verify_auth0_bearer = lambda token: UserAuthContext(
+    security._verify_cognito_bearer = lambda token: UserAuthContext(
         sub=sub, email=None, display_name=None
     )
 
@@ -78,8 +78,8 @@ def _mock_bearer(sub: str) -> None:
 def test_bearer_cannot_spend_as_unowned_agent() -> None:
     _reset_db()
     _seed_owned_agent()
-    original = security._verify_auth0_bearer
-    _mock_bearer("auth0|attacker")
+    original = security._verify_cognito_bearer
+    _mock_bearer("cognito-sub-attacker")
     app.dependency_overrides[get_redis] = lambda: FakeRedis()
     try:
         with TestClient(app) as client:
@@ -94,15 +94,15 @@ def test_bearer_cannot_spend_as_unowned_agent() -> None:
             )
         assert resp.status_code == 403
     finally:
-        security._verify_auth0_bearer = original
+        security._verify_cognito_bearer = original
         app.dependency_overrides.clear()
 
 
 def test_bearer_without_agent_header_cannot_spend_as_unowned_agent() -> None:
     _reset_db()
     _seed_owned_agent()
-    original = security._verify_auth0_bearer
-    _mock_bearer("auth0|attacker")
+    original = security._verify_cognito_bearer
+    _mock_bearer("cognito-sub-attacker")
     app.dependency_overrides[get_redis] = lambda: FakeRedis()
     try:
         with TestClient(app) as client:
@@ -116,15 +116,15 @@ def test_bearer_without_agent_header_cannot_spend_as_unowned_agent() -> None:
             )
         assert resp.status_code == 403
     finally:
-        security._verify_auth0_bearer = original
+        security._verify_cognito_bearer = original
         app.dependency_overrides.clear()
 
 
 def test_bearer_owner_can_spend_as_own_agent() -> None:
     _reset_db()
     _seed_owned_agent()
-    original = security._verify_auth0_bearer
-    _mock_bearer("auth0|victim")
+    original = security._verify_cognito_bearer
+    _mock_bearer("cognito-sub-victim")
     _mock_semantic("ALIGNED")
     app.dependency_overrides[get_redis] = lambda: FakeRedis()
     try:
@@ -140,5 +140,5 @@ def test_bearer_owner_can_spend_as_own_agent() -> None:
             )
         assert resp.status_code != 403
     finally:
-        security._verify_auth0_bearer = original
+        security._verify_cognito_bearer = original
         app.dependency_overrides.clear()

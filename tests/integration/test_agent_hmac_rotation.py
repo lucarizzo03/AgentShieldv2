@@ -16,7 +16,7 @@ def _user_auth(sub: str) -> UserAuthContext:
         sub=sub,
         email=f"{sub}@example.com",
         display_name=sub,
-        method="auth0",
+        method="cognito",
     )
 
 
@@ -37,21 +37,21 @@ def _create_agent(client: TestClient, name: str) -> str:
     return resp.json()["agent_id"]
 
 
-def test_owner_can_rotate_but_other_auth0_principal_cannot() -> None:
+def test_owner_can_rotate_but_other_cognito_principal_cannot() -> None:
     _reset_db()
-    app.dependency_overrides[verify_user_auth] = lambda: _user_auth("auth0|owner")
+    app.dependency_overrides[verify_user_auth] = lambda: _user_auth("cognito-sub-owner")
 
     with TestClient(app) as client:
         agent_id = _create_agent(client, "rotation-agent")
 
         app.dependency_overrides[verify_agent_auth] = lambda: AuthContext(
-            principal_id="auth0|attacker", method="auth0", agent_id=agent_id
+            principal_id="cognito-sub-attacker", method="cognito", agent_id=agent_id
         )
         forbidden = client.post(f"/v1/agents/{agent_id}/credentials/hmac/rotate")
         assert forbidden.status_code == 403, forbidden.text
 
         app.dependency_overrides[verify_agent_auth] = lambda: AuthContext(
-            principal_id="auth0|owner", method="auth0", agent_id=agent_id
+            principal_id="cognito-sub-owner", method="cognito", agent_id=agent_id
         )
         allowed = client.post(f"/v1/agents/{agent_id}/credentials/hmac/rotate")
         assert allowed.status_code == 200, allowed.text
@@ -62,7 +62,7 @@ def test_owner_can_rotate_but_other_auth0_principal_cannot() -> None:
 
 def test_hmac_principal_can_only_rotate_itself() -> None:
     _reset_db()
-    app.dependency_overrides[verify_user_auth] = lambda: _user_auth("auth0|owner")
+    app.dependency_overrides[verify_user_auth] = lambda: _user_auth("cognito-sub-owner")
 
     with TestClient(app) as client:
         agent_id = _create_agent(client, "rotation-agent")

@@ -207,7 +207,7 @@ async def rotate_agent_hmac(
                 detail="Cannot rotate another agent's credentials",
             )
     else:
-        # Auth0 principals must own the agent; x-agent-id is not an authorization claim.
+        # Cognito principals must own the agent; x-agent-id is not an authorization claim.
         user = (await session.exec(select(User).where(User.auth_subject == auth.principal_id))).first()
         if not user or agent.owner_user_id != user.id:
             raise HTTPException(
