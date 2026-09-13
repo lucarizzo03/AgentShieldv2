@@ -5,6 +5,8 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from redis.asyncio import Redis
+from redis.exceptions import RedisError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -20,23 +22,36 @@ from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
 from app.models.user import User
 from app.policy.checks.quantitative import (
+    clear_reservation_marker,
     commit_budget_spend,
     finalize_budget_reservation,
+    release_velocity_counters,
     rollback_budget_reservation,
     transaction_fingerprint,
+    velocity_fingerprint,
 )
 from app.policy.engine import run_financial_triangulation
 from app.services.activity_log import append_agent_activity
+from app.services.budget_reconciler import release_outstanding_reservation
 from app.services.hitl.notifier import HitlNotifier
 from app.services.idempotency import (
     cache_idempotent_response,
     claim_idempotency_slot,
     release_idempotency_slot,
 )
-from app.services.slm.client import AnthropicSemanticClient
+from app.services.slm.client import get_semantic_client
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["spend"])
+
+# Redis and Postgres failures are infrastructure, not verdicts.  Surfacing them
+# as a 500 leaves the caller unable to tell "denied" from "engine broken", and
+# invites a retry against a request that may already hold a reservation.
+_DEPENDENCY_ERRORS = (RedisError, SQLAlchemyError)
+
+# Velocity counters stay consumed when they are themselves the reason for the
+# block — releasing them would immediately un-detect the loop that was found.
+_VELOCITY_REASONS = {"LOOP_PATTERN_DETECTED", "DESTINATION_BURST_DETECTED"}
 
 _HIGH_RISK_REASONS = {
     "BUDGET_DAILY_LIMIT_EXCEEDED",
@@ -181,6 +196,24 @@ async def _record_idempotency_replay(session: AsyncSession, *, request_id: str) 
     await session.commit()
 
 
+def _dependency_unavailable_body(exc: Exception) -> dict:
+    return {
+        "request_id": None,
+        "status": "ENGINE_UNAVAILABLE",
+        "verdict": None,
+        "block_code": "ENGINE_DEPENDENCY_UNAVAILABLE",
+        "reasons": ["ENGINE_DEPENDENCY_UNAVAILABLE"],
+        "next_action": "RETRY_WITH_BACKOFF",
+        "detail": (
+            "The firewall could not reach a dependency and did not evaluate this "
+            "transaction. This is not a verdict — retry with the same idempotency key."
+        ),
+        "dependency": "redis" if isinstance(exc, RedisError) else "postgres",
+        "idempotency_replay": False,
+        "idempotency_note": None,
+    }
+
+
 @router.post("/spend-request")
 async def spend_request(
     payload: SpendRequest,
@@ -188,6 +221,40 @@ async def spend_request(
     auth_context: AuthContext = Depends(verify_agent_auth),
     session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
+):
+    try:
+        return await _spend_request(
+            payload=payload,
+            response=response,
+            auth_context=auth_context,
+            session=session,
+            redis=redis,
+        )
+    except _DEPENDENCY_ERRORS as exc:
+        dependency = "redis" if isinstance(exc, RedisError) else "postgres"
+        increment(f"spend.dependency_unavailable.{dependency}")
+        logger.error(
+            "Spend evaluation aborted: %s dependency unavailable",
+            dependency,
+            extra={"agent_id": payload.agent_id},
+            exc_info=True,
+        )
+        try:
+            await session.rollback()
+        except Exception:
+            logger.warning("Session rollback failed after dependency failure", exc_info=True)
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        response.headers["retry-after"] = "5"
+        return _dependency_unavailable_body(exc)
+
+
+async def _spend_request(
+    *,
+    payload: SpendRequest,
+    response: Response,
+    auth_context: AuthContext,
+    session: AsyncSession,
+    redis: Redis,
 ):
     await ensure_agent_access(session, auth_context, payload.agent_id)
 
@@ -248,7 +315,10 @@ async def spend_request(
     except Exception:
         # Never leave a claimed slot behind on failure — the agent must be able
         # to retry the same key immediately.
-        await release_idempotency_slot(redis, payload.agent_id, payload.idempotency_key)
+        try:
+            await release_idempotency_slot(redis, payload.agent_id, payload.idempotency_key)
+        except RedisError:
+            logger.error("Could not release idempotency slot after failure", exc_info=True)
         raise
 
 
@@ -263,21 +333,92 @@ async def _decide_spend(
 ) -> dict:
     request_id = f"req_{uuid4().hex[:18]}"
     settings = get_settings()
-    tri = await run_financial_triangulation(
-        redis=redis,
-        semantic_client=AnthropicSemanticClient(),
-        agent=agent,
-        amount_cents=payload.amount_cents,
-        vendor_url_or_name=payload.vendor_url_or_name,
-        item_description=payload.item_description,
-        declared_goal=payload.declared_goal,
-        asset_type=payload.asset_type,
-        stablecoin_symbol=payload.stablecoin_symbol,
-        network=payload.network,
-        destination_address=payload.destination_address,
-        fingerprint=fingerprint,
-    )
+    try:
+        tri = await run_financial_triangulation(
+            redis=redis,
+            semantic_client=get_semantic_client(),
+            agent=agent,
+            amount_cents=payload.amount_cents,
+            vendor_url_or_name=payload.vendor_url_or_name,
+            item_description=payload.item_description,
+            declared_goal=payload.declared_goal,
+            asset_type=payload.asset_type,
+            stablecoin_symbol=payload.stablecoin_symbol,
+            network=payload.network,
+            destination_address=payload.destination_address,
+            fingerprint=velocity_fingerprint(
+                vendor=payload.vendor_url_or_name,
+                asset_type=payload.asset_type,
+                stablecoin_symbol=payload.stablecoin_symbol,
+                network=payload.network,
+                destination_address=payload.destination_address,
+            ),
+            reservation_id=request_id,
+        )
+    except Exception:
+        # The reservation is taken first, so a failure anywhere later in the
+        # evaluation would otherwise consume budget for a request that never
+        # produced a decision.
+        await _release_reservation_best_effort(redis, request_id)
+        raise
 
+    try:
+        return await _record_decision(
+            payload=payload,
+            response=response,
+            agent=agent,
+            session=session,
+            redis=redis,
+            fingerprint=fingerprint,
+            request_id=request_id,
+            settings=settings,
+            tri=tri,
+        )
+    except Exception:
+        await _release_reservation_best_effort(redis, request_id)
+        raise
+
+
+async def _release_reservation_best_effort(redis: Redis, request_id: str) -> None:
+    try:
+        released = await release_outstanding_reservation(redis, request_id)
+    except Exception:
+        logger.error(
+            "Could not release budget reservation after failed evaluation; "
+            "the reconciler will pick it up",
+            extra={"request_id": request_id},
+            exc_info=True,
+        )
+        return
+    if released:
+        increment("budget.reservation.released_on_error")
+
+
+async def _unwind_velocity(redis: Redis, tri) -> None:
+    if _VELOCITY_REASONS & set(tri.reasons):
+        return
+    try:
+        await release_velocity_counters(
+            redis,
+            tri.quantitative_result.get("loop_key"),
+            tri.quantitative_result.get("burst_key"),
+        )
+    except Exception:
+        logger.error("Velocity counter release failed", exc_info=True)
+
+
+async def _record_decision(
+    *,
+    payload: SpendRequest,
+    response: Response,
+    agent: Agent,
+    session: AsyncSession,
+    redis: Redis,
+    fingerprint: str,
+    request_id: str,
+    settings,
+    tri,
+) -> dict:
     now = datetime.now(timezone.utc)
     if tri.verdict == "SAFE":
         increment("spend.verdict.safe")
@@ -323,6 +464,7 @@ async def _decide_spend(
                     redis, payload.agent_id, payload.asset_type, payload.amount_cents,
                     agent.daily_budget_limit_cents,
                 )
+            await clear_reservation_marker(redis, tri.quantitative_result.get("reservation_marker_key"))
         except Exception:
             logger.critical(
                 "Budget commit failed after payment execution — manual recovery required",
@@ -383,7 +525,10 @@ async def _decide_spend(
         if tri.quantitative_result.get("budget_reserved", False):
             try:
                 await rollback_budget_reservation(
-                    redis, tri.quantitative_result["budget_key"], payload.amount_cents
+                    redis,
+                    tri.quantitative_result["budget_key"],
+                    payload.amount_cents,
+                    tri.quantitative_result.get("reservation_marker_key"),
                 )
             except Exception:
                 logger.error(
@@ -391,6 +536,7 @@ async def _decide_spend(
                     extra={"agent_id": payload.agent_id, "amount_cents": payload.amount_cents, "request_id": request_id},
                     exc_info=True,
                 )
+        await _unwind_velocity(redis, tri)
         body = {
             "request_id": request_id,
             "status": "BLOCKED",
@@ -496,7 +642,10 @@ async def _decide_spend(
     if tri.quantitative_result.get("budget_reserved", False):
         try:
             await rollback_budget_reservation(
-                redis, tri.quantitative_result["budget_key"], payload.amount_cents
+                redis,
+                tri.quantitative_result["budget_key"],
+                payload.amount_cents,
+                tri.quantitative_result.get("reservation_marker_key"),
             )
         except Exception:
             logger.error(
@@ -504,6 +653,7 @@ async def _decide_spend(
                 extra={"agent_id": payload.agent_id, "amount_cents": payload.amount_cents, "request_id": request_id},
                 exc_info=True,
             )
+    await _unwind_velocity(redis, tri)
     owner_email: str | None = None
     if agent.owner_user_id:
         owner = (await session.exec(select(User).where(User.id == agent.owner_user_id))).first()
