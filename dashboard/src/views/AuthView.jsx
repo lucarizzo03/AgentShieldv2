@@ -58,7 +58,7 @@ export default function AuthView() {
       title="Sign in to AgentShield"
       subtitle="Auth0 handles the login. Your agents, spend activity, and approval queue live behind it."
       footer={
-        <p className="auth-mono" style={{ margin: 0, fontSize: 11, color: "#3d3d3d", letterSpacing: "0.06em" }}>
+        <p className="auth-mono" style={{ margin: 0, fontSize: 11, color: "#858585", letterSpacing: "0.06em" }}>
           AUTHORIZATION CODE + PKCE
         </p>
       }
