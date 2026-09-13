@@ -41,7 +41,7 @@ export default function AuthCallbackView() {
 
   return (
     <AuthShell label="SIGN IN" title="Completing sign-in" subtitle="Exchanging your authorization code with Auth0.">
-      <div style={{ display: "flex", alignItems: "center", gap: 10, color: "#777", fontSize: 13 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, color: "#a1a1a1", fontSize: 13 }}>
         <span className="auth-spinner" />
         This should only take a second.
       </div>
