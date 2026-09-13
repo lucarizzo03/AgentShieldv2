@@ -103,6 +103,7 @@ async def _reject_approval_if_stale(*, pending: PendingSpend, session: AsyncSess
         stablecoin_symbol=original.stablecoin_symbol,
         network=original.network,
         destination_address=original.destination_address,
+        currency=original.currency,
     )
     if policy.hard_deny:
         increment("hitl.approval.rejected_policy_changed")
@@ -117,6 +118,7 @@ async def _reject_approval_if_stale(*, pending: PendingSpend, session: AsyncSess
         asset_type=original.asset_type,
         amount_cents=original.amount_cents,
         daily_budget_limit_cents=agent.daily_budget_limit_cents,
+        currency=agent.currency,
     )
     if not committed:
         increment("hitl.approval.rejected_budget_exceeded")
@@ -237,7 +239,11 @@ async def _resolve_pending(
         if payload.decision == "APPROVE":
             await rollback_budget_reservation(
                 redis,
-                daily_budget_key(pending.agent_id, pending.payload_json["asset_type"]),
+                daily_budget_key(
+                    pending.agent_id,
+                    pending.payload_json["asset_type"],
+                    currency=pending.payload_json["currency"],
+                ),
                 pending.payload_json["amount_cents"],
             )
         raise

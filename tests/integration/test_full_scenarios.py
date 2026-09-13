@@ -602,7 +602,7 @@ class TestMaliciousPath:
         _reset_db()
         _seed_agent(daily_budget_limit_cents=1_000)
         date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        self.redis._values[f"budget:daily:test_agent_001:STABLECOIN:{date_key}"] = "900"
+        self.redis._values[f"budget:daily:test_agent_001:STABLECOIN:USD:{date_key}"] = "900"
         payload = {**_STABLECOIN, "amount_cents": 200, "idempotency_key": "mal-budget-001"}
         self._assert_blocked(self._send(payload), "BUDGET_DAILY_LIMIT_EXCEEDED")
 
