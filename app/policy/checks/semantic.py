@@ -1,12 +1,26 @@
 from app.policy.verdicts import CheckResult
 from app.services.slm.client import AnthropicSemanticClient
 
-# Thresholds operate on the 0-100 normalized score (higher = more aligned = safer).
+# Thresholds operate on the 0-100 normalized alignment score (higher = more aligned = safer).
 # >= 75  → ALIGNED  → safe
-# 45-75  → WEAK     → suspicious (HITL)
-# <= 45  → MISMATCH → hard block
+# 45-74  → WEAK     → suspicious (HITL)
+# < 45   → MISMATCH → hard block
 _SAFE_THRESHOLD = 75
 _BLOCK_THRESHOLD = 45
+
+
+def _coerce_risk_score(raw) -> int | None:
+    """Normalize the model's risk score to an integer 0-100, or None if unusable."""
+    if isinstance(raw, bool) or raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    # Claude occasionally returns a 0–1 decimal instead of a 0–100 integer.
+    # Values strictly between 0 and 1 are treated as fractional and scaled up.
+    score = round(value * 100) if 0 < value < 1 else round(value)
+    return max(0, min(100, int(score)))
 
 
 async def run_semantic_checks(
@@ -29,24 +43,36 @@ async def run_semantic_checks(
         destination_address=destination_address,
     )
 
-    _score_raw = result.get("risk_score") or 0
-    _score_float = float(_score_raw)
-    # Claude occasionally returns a 0–1 decimal instead of 0–100 integer.
-    # Values strictly between 0 and 1 are treated as fractional and scaled up.
-    risk_score = int(round(_score_float * 100)) if 0 < _score_float < 1 else int(_score_float)
+    reason_codes = list(result.get("reason_codes", []))
+    risk_score = _coerce_risk_score(result.get("risk_score"))
+    evaluation_error = bool(result.get("evaluation_error", False)) or risk_score is None
+
+    check = CheckResult()
+    if evaluation_error:
+        # The model never produced a usable judgement. Route to a human instead
+        # of inventing a score — a provider outage must not hard-deny every spend.
+        check.suspicious = True
+        check.reasons.append("SEMANTIC_EVAL_UNAVAILABLE")
+        check.context = {
+            "alignment_label": "UNAVAILABLE",
+            "risk_score": None,
+            "raw_risk_score": None,
+            "reason_codes": reason_codes,
+            "evaluation_error": True,
+        }
+        return check
+
     # Claude returns a risk score (0=safe, 100=dangerous). Invert to an
     # alignment score (100=safe, 0=dangerous) so thresholds read naturally.
     raw_score = 100 - risk_score
-    reason_codes = list(result.get("reason_codes", []))
 
     if raw_score >= _SAFE_THRESHOLD:
         alignment_label = "ALIGNED"
-    elif raw_score > _BLOCK_THRESHOLD:
+    elif raw_score >= _BLOCK_THRESHOLD:
         alignment_label = "WEAK"
     else:
         alignment_label = "MISMATCH"
 
-    check = CheckResult()
     if alignment_label == "MISMATCH":
         check.hard_deny = True
         check.reasons.append("SEMANTIC_MISMATCH_HIGH")
@@ -61,5 +87,6 @@ async def run_semantic_checks(
         "risk_score": raw_score,
         "raw_risk_score": raw_score,
         "reason_codes": reason_codes,
+        "evaluation_error": False,
     }
     return check
