@@ -15,7 +15,7 @@ from app.api.v1.schemas.hitl import HitlResolveRequest
 from app.api.v1.schemas.spend import SpendRequest
 from app.core.config import get_settings
 from app.core.metrics import increment
-from app.core.security import verify_hitl_auth
+from app.core.security import UserAuthContext, ensure_operator_owns_agent, verify_hitl_auth
 from app.db.postgres import get_session
 from app.db.redis import get_redis
 from app.models.agent import Agent
@@ -142,12 +142,16 @@ async def _resolve_pending(
     session: AsyncSession,
     redis: Redis,
     background_tasks: BackgroundTasks,
+    operator: UserAuthContext | None = None,
 ):
     pending = (await session.exec(
         select(PendingSpend).where(PendingSpend.request_id == request_id).with_for_update()
     )).first()
     if not pending:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending request not found")
+
+    if operator is not None:
+        await ensure_operator_owns_agent(session, operator=operator, agent_id=pending.agent_id)
 
     try:
         ensure_pending_is_resolvable(pending)
@@ -270,11 +274,12 @@ async def resolve_hitl_request(
     request_id: str,
     payload: HitlResolveRequest,
     background_tasks: BackgroundTasks,
-    _: None = Depends(verify_hitl_auth),
+    operator: UserAuthContext | None = Depends(verify_hitl_auth),
     session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
     return await _resolve_pending(
+        operator=operator,
         request_id=request_id,
         payload=payload,
         session=session,
