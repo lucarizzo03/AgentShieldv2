@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 from app.core.config import get_settings
 from app.db.redis import seconds_until_next_utc_midnight
 from app.models.agent import Agent
+from app.policy.currency import to_major_units
 from app.policy.verdicts import CheckResult
 
 RESERVATION_MARKER_PREFIX = "budget:reserved:"
@@ -88,9 +89,16 @@ return 1
 """
 
 
-def daily_budget_key(agent_id: str, asset_type: str, moment: datetime | None = None) -> str:
+def daily_budget_key(
+    agent_id: str,
+    asset_type: str,
+    moment: datetime | None = None,
+    currency: str = "USD",
+) -> str:
+    """Scoped by currency as well as asset type: one counter per currency keeps
+    unlike amounts from summing into a limit denominated in a single one."""
     date_key = (moment or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
-    return f"budget:daily:{agent_id}:{asset_type}:{date_key}"
+    return f"budget:daily:{agent_id}:{asset_type}:{currency.strip().upper()}:{date_key}"
 
 
 def reservation_marker_key(reservation_id: str) -> str:
@@ -157,7 +165,7 @@ async def run_quantitative_checks(
     settings = get_settings()
     check = CheckResult()
 
-    budget_key = daily_budget_key(agent.agent_id, asset_type)
+    budget_key = daily_budget_key(agent.agent_id, asset_type, currency=agent.currency)
     loop_key = f"loop:txn:{agent.agent_id}:{fingerprint}"
     burst_key = (
         f"dest:burst:{agent.agent_id}:{network}:{destination_address}"
@@ -214,8 +222,9 @@ async def run_quantitative_checks(
         "reservation_marker_key": marker_key if marker_ttl else None,
         "loop_key": loop_key if not budget_exceeded else None,
         "burst_key": burst_key if burst_key and not budget_exceeded else None,
-        "daily_spent_usd": round(current_spent / 100, 2),
-        "projected_spent_usd": round(projected / 100, 2),
+        "currency": agent.currency,
+        "daily_spent": to_major_units(current_spent, agent.currency),
+        "projected_spent": to_major_units(projected, agent.currency),
         "budget_exceeded": budget_exceeded,
         "budget_reserved": reserved,
         "loop_count": int(loop_count),
@@ -230,6 +239,7 @@ async def commit_budget_spend(
     asset_type: str,
     amount_cents: int,
     daily_budget_limit_cents: int,
+    currency: str = "USD",
 ) -> tuple[bool, int]:
     """Full budget commit, used by the HITL APPROVE path where the earlier
     tentative reservation was rolled back before the human decision.
@@ -237,7 +247,7 @@ async def commit_budget_spend(
     The limit is re-checked atomically: an approval that arrives hours later
     must not push the agent past the budget it has spent in the meantime.
     Returns ``(committed, spend_before)``."""
-    budget_key = daily_budget_key(agent_id, asset_type)
+    budget_key = daily_budget_key(agent_id, asset_type, currency=currency)
     result = await redis.eval(
         _CHECK_AND_RESERVE_BUDGET, 2, budget_key, _NO_MARKER_KEY,
         amount_cents, daily_budget_limit_cents, seconds_until_next_utc_midnight(), "", 0,

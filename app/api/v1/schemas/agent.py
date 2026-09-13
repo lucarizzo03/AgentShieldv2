@@ -12,6 +12,7 @@ class AgentCreateRequest(BaseModel):
     per_transaction_limit_usd: int = Field(ge=0, le=1_000_000)
     auto_approve_under_usd: int = Field(ge=0, le=1_000_000)
     blocked_vendors: list[str] = Field(default_factory=list)
+    allowed_vendors: list[str] = Field(default_factory=list)
     asset_type: Literal["STABLECOIN", "FIAT"]
     allowed_networks: list[str] = Field(default_factory=list)
     allowed_tokens: list[str] = Field(default_factory=list)
@@ -26,6 +27,7 @@ class AgentSettingsUpdateRequest(BaseModel):
     per_transaction_limit_usd: int = Field(ge=0, le=1_000_000)
     auto_approve_under_usd: int = Field(ge=0, le=1_000_000)
     blocked_vendors: list[str] = Field(default_factory=list)
+    allowed_vendors: list[str] = Field(default_factory=list)
     allowed_networks: list[str] = Field(default_factory=list)
     allowed_tokens: list[str] = Field(default_factory=list)
     allowed_scopes: list[str] = Field(default_factory=list)
@@ -58,6 +60,7 @@ class AgentSummary(BaseModel):
     per_transaction_limit_usd: int
     auto_approve_under_usd: int
     blocked_vendors: list[str] = Field(default_factory=list)
+    allowed_vendors: list[str] = Field(default_factory=list)
     allowed_networks: list[str] = Field(default_factory=list)
     allowed_tokens: list[str] = Field(default_factory=list)
     allowed_scopes: list[str] = Field(default_factory=list)

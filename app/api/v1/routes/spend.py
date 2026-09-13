@@ -346,6 +346,7 @@ async def _decide_spend(
             stablecoin_symbol=payload.stablecoin_symbol,
             network=payload.network,
             destination_address=payload.destination_address,
+            currency=payload.currency,
             fingerprint=velocity_fingerprint(
                 vendor=payload.vendor_url_or_name,
                 asset_type=payload.asset_type,
@@ -462,7 +463,7 @@ async def _record_decision(
             else:
                 await commit_budget_spend(
                     redis, payload.agent_id, payload.asset_type, payload.amount_cents,
-                    agent.daily_budget_limit_cents,
+                    agent.daily_budget_limit_cents, agent.currency,
                 )
             await clear_reservation_marker(redis, tri.quantitative_result.get("reservation_marker_key"))
         except Exception:
