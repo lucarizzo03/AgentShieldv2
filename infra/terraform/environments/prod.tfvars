@@ -21,7 +21,7 @@ dashboard_origin = "https://agent-shieldv2.vercel.app"
 # the command line, e.g.
 #   terraform apply -var-file=environments/prod.tfvars -var image_tag=$(git rev-parse --short HEAD)
 
-hitl_email_from = ""
+hitl_email_from = "noreply@agentshield.uk"
 hitl_email_to   = ""
 
 acm_certificate_arn = ""
