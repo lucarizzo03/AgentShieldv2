@@ -35,6 +35,12 @@ AsyncSessionLocal = async_sessionmaker(async_engine, class_=AsyncSession, expire
 
 
 async def create_db_and_tables() -> None:
+    # Alembic owns the Postgres schema. Creating tables from metadata would
+    # leave `alembic_version` empty and put the database outside the migration
+    # history, so it is limited to SQLite (local runs and tests), which has no
+    # migration story of its own.
+    if not postgres_dsn_async.startswith("sqlite"):
+        return
     async with async_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
 

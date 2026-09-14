@@ -7,6 +7,7 @@ from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 from app.core.config import get_settings
+from app.db.postgres import _build_sync_dsn
 from app.models import Agent, DashboardNotification, PendingSpend, SpendAuditLog  # noqa: F401
 
 config = context.config
@@ -15,7 +16,7 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.postgres_dsn)
+config.set_main_option("sqlalchemy.url", _build_sync_dsn(settings.postgres_dsn))
 target_metadata = SQLModel.metadata
 
 
