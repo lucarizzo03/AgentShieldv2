@@ -42,6 +42,26 @@ export default function AuthShell({ label, title, subtitle, children, footer }) 
         .auth-lnk:hover { color: #ccc; }
         .auth-note { border: 1px solid #242424; background: #101010; padding: 12px 14px; font-size: 12.5px; line-height: 1.6; color: #9a9a9a; }
         .auth-note-bad { border-color: #4a2424; background: #140f0f; color: #eaaaaa; }
+        .auth-note-good { border-color: #1f3a2a; background: #0d140f; color: #a8dcb8; }
+        .auth-field { display: grid; gap: 6px; }
+        .auth-label { font-family: "Geist Mono", "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: 0.1em; color: #8a8a8a; text-transform: uppercase; }
+        .auth-input {
+          width: 100%; height: 40px; padding: 0 12px; box-sizing: border-box;
+          background: #101010; color: #ededed; border: 1px solid #262626;
+          font-family: Geist, "IBM Plex Sans", sans-serif; font-size: 14px; outline: none;
+          transition: border-color 100ms;
+        }
+        .auth-input::placeholder { color: #4a4a4a; }
+        .auth-input:focus { border-color: #5a5a5a; }
+        .auth-input:disabled { opacity: 0.5; }
+        .auth-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .auth-text-btn {
+          background: none; border: 0; padding: 0; color: #949494; font-size: 12.5px; cursor: pointer;
+          font-family: inherit; transition: color 100ms;
+        }
+        .auth-text-btn:hover:not(:disabled) { color: #ededed; }
+        .auth-text-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .auth-divider { border: 0; border-top: 1px solid #1c1c1c; margin: 4px 0; }
         @keyframes authSpin { to { transform: rotate(360deg); } }
         .auth-spinner {
           width: 14px; height: 14px; border: 1.5px solid #2e2e2e; border-top-color: #ededed;
