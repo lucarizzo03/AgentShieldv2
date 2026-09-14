@@ -14,12 +14,16 @@ class Agent(SQLModel, table=True):
     per_txn_auto_approve_limit_cents: int = Field(default=10_000)
     currency: str = Field(default="USD", max_length=3)
     blocked_vendors: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    # When non-empty, only these vendors may be paid: a strict allowlist beats
+    # any phishing heuristic for agents with a known vendor set.
+    allowed_vendors: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     allowed_stablecoins: list[str] = Field(default_factory=lambda: ["USDC", "USDT"], sa_column=Column(JSON))
     allowed_networks: list[str] = Field(
         default_factory=lambda: ["ethereum", "base", "solana"], sa_column=Column(JSON)
     )
     allowed_destination_addresses: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     blocked_destination_addresses: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    allowed_scopes: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     owner_user_id: UUID | None = Field(default=None, foreign_key="users.id", index=True)
     hmac_secret: str | None = Field(default=None, max_length=256)
     hmac_secret_rotated_at: datetime | None = Field(default=None)

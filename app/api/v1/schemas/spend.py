@@ -1,7 +1,14 @@
 from datetime import datetime
+from enum import Enum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+
+
+class HitlChannel(str, Enum):
+    SMS = "sms"
+    DASHBOARD = "dashboard"
+    EMAIL_DASHBOARD = "email+dashboard"
 
 
 class SpendRequest(BaseModel):
@@ -15,32 +22,30 @@ class SpendRequest(BaseModel):
     item_description: str = Field(min_length=2, max_length=4000)
     asset_type: Literal["STABLECOIN", "FIAT"]
     stablecoin_symbol: Literal["USDC", "USDT", "USDC.e", "USDC.b"] | None = None
-    network: Literal["ethereum", "base", "solana", "polygon", "arbitrum", "tempo"] | None = None
+    network: Literal["ethereum", "base", "solana", "polygon", "arbitrum"] | None = None
     destination_address: str | None = Field(default=None, min_length=16, max_length=128)
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
     agent_callback_url: HttpUrl | None = None
-    dev_slm_preset: Literal["ALIGNED", "WEAK", "MISMATCH"] | None = None
+
+    @field_validator("stablecoin_symbol", "network", "destination_address", mode="before")
+    @classmethod
+    def empty_string_to_none(cls, value):
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
     @model_validator(mode="after")
-    def validate_stablecoin_fields(self) -> "SpendRequest":
+    def validate_asset_fields(self) -> "SpendRequest":
+        if self.destination_address is None:
+            raise ValueError("destination_address is required")
+
         if self.asset_type == "STABLECOIN":
-            required_fields = [self.stablecoin_symbol, self.network, self.destination_address]
+            required_fields = [self.stablecoin_symbol, self.network]
             if any(value is None for value in required_fields):
                 raise ValueError(
-                    "stablecoin_symbol, network, and destination_address are required for STABLECOIN"
+                    "stablecoin_symbol and network are required for STABLECOIN"
                 )
         return self
-
-
-class PaymentExecutionResult(BaseModel):
-    provider: str
-    provider_txn_id: str
-    asset_type: Literal["STABLECOIN", "FIAT"]
-    stablecoin_symbol: str | None = None
-    network: str | None = None
-    destination_address: str | None = None
-    onchain_tx_hash: str | None = None
-    executed_at: datetime
 
 
 class SpendApprovedResponse(BaseModel):
@@ -49,8 +54,10 @@ class SpendApprovedResponse(BaseModel):
     verdict: Literal["SAFE"]
     approved_amount_cents: int
     currency: str
-    payment: PaymentExecutionResult
     reasons: list[str]
+    agent_feedback: dict
+    idempotency_replay: bool = False
+    idempotency_note: str | None = None
 
 
 class SpendBlockedResponse(BaseModel):
@@ -60,11 +67,14 @@ class SpendBlockedResponse(BaseModel):
     block_code: str
     reasons: list[str]
     next_action: Literal["DO_NOT_RETRY"]
+    agent_feedback: dict
+    idempotency_replay: bool = False
+    idempotency_note: str | None = None
 
 
 class HitlStatePayload(BaseModel):
     state: Literal["WAITING_HUMAN_REVIEW", "WAITING_HUMAN_TEXT_RESPONSE"]
-    channel: Literal["sms", "dashboard"]
+    channel: HitlChannel
     requested_at: datetime
     expires_at: datetime
 
@@ -76,4 +86,7 @@ class SpendPendingResponse(BaseModel):
     hitl: HitlStatePayload
     reasons: list[str]
     next_action: Literal["AGENT_MUST_WAIT"]
+    agent_feedback: dict
+    idempotency_replay: bool = False
+    idempotency_note: str | None = None
 

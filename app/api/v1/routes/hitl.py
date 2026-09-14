@@ -3,11 +3,11 @@ import hmac as _hmac
 import logging
 from datetime import datetime, timezone
 
-import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse
 from redis.asyncio import Redis
-from sqlmodel import Session, select
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -15,14 +15,22 @@ from app.api.v1.schemas.hitl import HitlResolveRequest
 from app.api.v1.schemas.spend import SpendRequest
 from app.core.config import get_settings
 from app.core.metrics import increment
-from app.core.security import verify_hitl_webhook_signature
+from app.core.security import UserAuthContext, ensure_operator_owns_agent, verify_hitl_auth
 from app.db.postgres import get_session
 from app.db.redis import get_redis
+from app.models.agent import Agent
 from app.models.dashboard_notification import DashboardNotification
 from app.models.pending_spend import PendingSpend
 from app.models.spend_audit_log import SpendAuditLog
-from app.policy.checks.quantitative import commit_budget_spend
+from app.policy.checks.policy_db import run_policy_checks
+from app.policy.checks.quantitative import (
+    commit_budget_spend,
+    daily_budget_key,
+    rollback_budget_reservation,
+)
+from app.policy.provenance import engine_provenance
 from app.services.activity_log import append_agent_activity
+from app.services.hitl.callback import build_callback_body, deliver_verdict_callback
 from app.services.hitl.state_manager import apply_resolution, ensure_pending_is_resolvable
 
 
@@ -70,53 +78,117 @@ def _email_error_page(message: str) -> str:
 router = APIRouter(tags=["hitl"])
 
 
+async def _reject_approval_if_stale(*, pending: PendingSpend, session: AsyncSession, redis: Redis) -> None:
+    """Re-run Check A and Check B against the agent's *current* state before an
+    approval releases money.
+
+    The reservation taken during evaluation was rolled back when the request was
+    parked, and the agent's config and daily spend can both have moved since —
+    so an approval minutes or hours later must be re-validated, not trusted.
+    The budget is committed here (atomically, under the current limit) so a
+    failed commit aborts the approval instead of resolving it with no money moved.
+    """
+    original = SpendRequest.model_validate(pending.payload_json)
+    agent = (await session.exec(select(Agent).where(Agent.agent_id == pending.agent_id))).first()
+    if not agent or agent.status != "ACTIVE":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agent is no longer active; approval rejected.",
+        )
+
+    policy = run_policy_checks(
+        agent=agent,
+        amount_cents=original.amount_cents,
+        vendor_url_or_name=original.vendor_url_or_name,
+        asset_type=original.asset_type,
+        stablecoin_symbol=original.stablecoin_symbol,
+        network=original.network,
+        destination_address=original.destination_address,
+        currency=original.currency,
+    )
+    if policy.hard_deny:
+        increment("hitl.approval.rejected_policy_changed")
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Agent policy changed since evaluation; approval rejected: {', '.join(policy.reasons)}",
+        )
+
+    committed, spent_before = await commit_budget_spend(
+        redis=redis,
+        agent_id=original.agent_id,
+        asset_type=original.asset_type,
+        amount_cents=original.amount_cents,
+        daily_budget_limit_cents=agent.daily_budget_limit_cents,
+        currency=agent.currency,
+    )
+    if not committed:
+        increment("hitl.approval.rejected_budget_exceeded")
+        logger.warning(
+            "HITL approval rejected — agent is now over its daily budget",
+            extra={
+                "agent_id": original.agent_id,
+                "request_id": pending.request_id,
+                "amount_cents": original.amount_cents,
+                "daily_spent_cents": spent_before,
+            },
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agent has exhausted its daily budget since evaluation; approval rejected.",
+        )
+
+
 async def _resolve_pending(
     *,
     request_id: str,
     payload: HitlResolveRequest,
-    session: Session,
+    session: AsyncSession,
     redis: Redis,
+    background_tasks: BackgroundTasks,
+    operator: UserAuthContext | None = None,
 ):
-    pending = session.exec(select(PendingSpend).where(PendingSpend.request_id == request_id)).first()
+    pending = (await session.exec(
+        select(PendingSpend).where(PendingSpend.request_id == request_id).with_for_update()
+    )).first()
     if not pending:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Pending request not found")
+
+    if operator is not None:
+        await ensure_operator_owns_agent(session, operator=operator, agent_id=pending.agent_id)
 
     try:
         ensure_pending_is_resolvable(pending)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
+    if payload.decision == "APPROVE":
+        await _reject_approval_if_stale(pending=pending, session=session, redis=redis)
+
     apply_resolution(pending, payload.decision, payload.resolver_id)
 
     if payload.decision == "APPROVE":
         increment("hitl.decision.approve")
         original = SpendRequest.model_validate(pending.payload_json)
-        audit = session.exec(
-            select(SpendAuditLog).where(SpendAuditLog.request_id == request_id)
-        ).first()
-        if audit:
-            audit.status = "APPROVED_BY_HUMAN_EXECUTED"
-            audit.verdict = "SAFE"
-        else:
-            audit = SpendAuditLog(
-                request_id=request_id,
-                agent_id=original.agent_id,
-                declared_goal=original.declared_goal,
-                amount_cents=original.amount_cents,
-                currency=original.currency,
-                asset_type=original.asset_type,
-                stablecoin_symbol=original.stablecoin_symbol,
-                network=original.network,
-                destination_address=original.destination_address,
-                vendor_url_or_name=original.vendor_url_or_name,
-                item_description=original.item_description,
-                quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
-                policy_result=pending.verdict_snapshot.get("policy_result", {}),
-                semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
-                verdict="SAFE",
-                status="APPROVED_BY_HUMAN_EXECUTED",
-            )
-        session.add(audit)
+        session.add(SpendAuditLog(
+            request_id=request_id,
+            agent_id=original.agent_id,
+            declared_goal=original.declared_goal,
+            amount_cents=original.amount_cents,
+            currency=original.currency,
+            asset_type=original.asset_type,
+            stablecoin_symbol=original.stablecoin_symbol,
+            network=original.network,
+            destination_address=original.destination_address,
+            vendor_url_or_name=original.vendor_url_or_name,
+            item_description=original.item_description,
+            quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
+            policy_result=pending.verdict_snapshot.get("policy_result", {}),
+            semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
+            goal_drift_result=pending.verdict_snapshot.get("goal_drift_result", {}),
+            verdict="SAFE",
+            status="APPROVED_BY_HUMAN_EXECUTED",
+            engine_provenance=engine_provenance(),
+        ))
         append_agent_activity(
             session,
             agent_id=original.agent_id,
@@ -126,32 +198,26 @@ async def _resolve_pending(
     else:
         increment("hitl.decision.deny")
         original = pending.payload_json
-        audit = session.exec(
-            select(SpendAuditLog).where(SpendAuditLog.request_id == request_id)
-        ).first()
-        if audit:
-            audit.status = "DENIED_BY_HUMAN"
-            audit.verdict = "MALICIOUS"
-        else:
-            audit = SpendAuditLog(
-                request_id=request_id,
-                agent_id=original["agent_id"],
-                declared_goal=original["declared_goal"],
-                amount_cents=original["amount_cents"],
-                currency=original["currency"],
-                asset_type=original["asset_type"],
-                stablecoin_symbol=original.get("stablecoin_symbol"),
-                network=original.get("network"),
-                destination_address=original.get("destination_address"),
-                vendor_url_or_name=original["vendor_url_or_name"],
-                item_description=original["item_description"],
-                quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
-                policy_result=pending.verdict_snapshot.get("policy_result", {}),
-                semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
-                verdict="MALICIOUS",
-                status="DENIED_BY_HUMAN",
-            )
-        session.add(audit)
+        session.add(SpendAuditLog(
+            request_id=request_id,
+            agent_id=original["agent_id"],
+            declared_goal=original["declared_goal"],
+            amount_cents=original["amount_cents"],
+            currency=original["currency"],
+            asset_type=original["asset_type"],
+            stablecoin_symbol=original.get("stablecoin_symbol"),
+            network=original.get("network"),
+            destination_address=original.get("destination_address"),
+            vendor_url_or_name=original["vendor_url_or_name"],
+            item_description=original["item_description"],
+            quantitative_result=pending.verdict_snapshot.get("quantitative_result", {}),
+            policy_result=pending.verdict_snapshot.get("policy_result", {}),
+            semantic_result=pending.verdict_snapshot.get("semantic_result", {}),
+            goal_drift_result=pending.verdict_snapshot.get("goal_drift_result", {}),
+            verdict="MALICIOUS",
+            status="DENIED_BY_HUMAN",
+            engine_provenance=engine_provenance(),
+        ))
         append_agent_activity(
             session,
             agent_id=original["agent_id"],
@@ -159,9 +225,9 @@ async def _resolve_pending(
             event_payload={"request_id": request_id, "resolver_id": payload.resolver_id},
         )
 
-    notification = session.exec(
+    notification = (await session.exec(
         select(DashboardNotification).where(DashboardNotification.request_id == request_id)
-    ).first()
+    )).first()
     if notification and notification.status in {"OPEN", "ACKED"}:
         notification.status = "RESOLVED"
         notification.acknowledged_by = payload.resolver_id
@@ -170,31 +236,39 @@ async def _resolve_pending(
         session.add(notification)
 
     session.add(pending)
-    session.commit()
+    try:
+        await session.commit()
+    except Exception:
+        if payload.decision == "APPROVE":
+            await rollback_budget_reservation(
+                redis,
+                daily_budget_key(
+                    pending.agent_id,
+                    pending.payload_json["asset_type"],
+                    currency=pending.payload_json["currency"],
+                ),
+                pending.payload_json["amount_cents"],
+            )
+        raise
 
-    if payload.decision == "APPROVE":
-        await commit_budget_spend(
-            redis=redis,
-            agent_id=original.agent_id,
-            asset_type=original.asset_type,
-            amount_cents=original.amount_cents,
-        )
-
+    # Push the verdict to the agent's callback URL (signed + retried) so it
+    # doesn't have to poll. Runs after the response is sent; polling stays as
+    # the fallback if the agent has no callback URL or delivery fails.
     callback_url = pending.payload_json.get("agent_callback_url")
     if callback_url:
-        callback_body = {
-            "request_id": request_id,
-            "decision": payload.decision,
-            "status": "APPROVED_BY_HUMAN_EXECUTED" if payload.decision == "APPROVE" else "DENIED_BY_HUMAN",
-            "verdict": "SAFE" if payload.decision == "APPROVE" else "MALICIOUS",
-            "resolved_at": pending.resolved_at.isoformat() if pending.resolved_at else None,
-        }
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.post(callback_url, json=callback_body, timeout=10)
-            logger.info("HITL callback delivered", extra={"request_id": request_id, "url": callback_url})
-        except Exception as exc:
-            logger.warning("HITL callback failed", extra={"request_id": request_id, "url": callback_url, "error": str(exc)})
+        agent = (await session.exec(
+            select(Agent).where(Agent.agent_id == pending.agent_id)
+        )).first()
+        if agent and agent.hmac_secret:
+            callback_body = build_callback_body(request_id, payload.decision, pending.resolved_at)
+            background_tasks.add_task(
+                deliver_verdict_callback, callback_url, callback_body, agent.hmac_secret
+            )
+        else:
+            logger.warning(
+                "HITL callback skipped — agent has no HMAC secret to sign with",
+                extra={"request_id": request_id, "agent_id": pending.agent_id},
+            )
 
     return {
         "request_id": request_id,
@@ -208,11 +282,19 @@ async def _resolve_pending(
 async def resolve_hitl_request(
     request_id: str,
     payload: HitlResolveRequest,
-    _: None = Depends(verify_hitl_webhook_signature),
-    session: Session = Depends(get_session),
+    background_tasks: BackgroundTasks,
+    operator: UserAuthContext | None = Depends(verify_hitl_auth),
+    session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
-    return await _resolve_pending(request_id=request_id, payload=payload, session=session, redis=redis)
+    return await _resolve_pending(
+        operator=operator,
+        request_id=request_id,
+        payload=payload,
+        session=session,
+        redis=redis,
+        background_tasks=background_tasks,
+    )
 
 
 
@@ -221,7 +303,8 @@ async def email_resolve(
     request_id: str,
     decision: str,
     token: str,
-    session: Session = Depends(get_session),
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
     redis: Redis = Depends(get_redis),
 ):
     settings = get_settings()
@@ -239,7 +322,13 @@ async def email_resolve(
 
     payload = HitlResolveRequest(decision=decision, resolver_id="email-link", channel="email")
     try:
-        await _resolve_pending(request_id=request_id, payload=payload, session=session, redis=redis)
+        await _resolve_pending(
+            request_id=request_id,
+            payload=payload,
+            session=session,
+            redis=redis,
+            background_tasks=background_tasks,
+        )
     except HTTPException as exc:
         msg = "This request has already been resolved." if exc.status_code == 409 else exc.detail
         return HTMLResponse(_email_error_page(msg), status_code=exc.status_code)

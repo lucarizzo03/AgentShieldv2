@@ -1,24 +1,57 @@
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", case_sensitive=False, extra="ignore")
 
-    app_env: str = "dev"
-    postgres_dsn: str = Field(default="sqlite:///./agentshield.db")
-    redis_dsn: str = Field(default="redis://localhost:6379/0")
-    slm_model_name: str = Field(default="llama3:8b")
+    app_env: str = "prod"
+    postgres_dsn: str = Field(
+        default="sqlite:///./agentshield.db",
+        validation_alias=AliasChoices("POSTGRES_DSN", "DATABASE_URL"),
+    )
+    redis_dsn: str = Field(
+        default="redis://localhost:6379/0",
+        validation_alias=AliasChoices("REDIS_DSN", "REDIS_URL"),
+    )
+    anthropic_model_name: str = Field(default="claude-haiku-4-5-20251001")
     hitl_default_timeout_seconds: int = Field(default=600)
     loop_window_seconds: int = Field(default=60)
     loop_threshold: int = Field(default=5)
+    # Alignment score bands (0-100, higher = more aligned):
+    #   >= semantic_aligned_min_score         → ALIGNED  → safe
+    #   >= semantic_weak_suspicious_min_score → WEAK     → suspicious (HITL)
+    #   below                                 → MISMATCH → hard block
+    semantic_aligned_min_score: int = Field(default=75)
+    semantic_weak_suspicious_min_score: int = Field(default=45)
+    # A within_scope verdict the model is unsure about is not evidence of scope
+    # compliance; below this confidence Check D routes to a human instead.
+    goal_drift_min_confidence: int = Field(default=60)
+    # Deadlines around the Claude calls.  Anything slower than this degrades to
+    # HITL instead of holding a worker: a slow provider must not become latency
+    # for the calling agent.
+    anthropic_timeout_seconds: float = Field(default=8.0)
+    anthropic_max_retries: int = Field(default=1)
+    slm_deadline_seconds: float = Field(default=12.0)
+    # Consecutive failures before Checks C/D stop calling Anthropic and degrade
+    # straight to HITL, and how long that lasts before a single probe retries.
+    slm_breaker_failure_threshold: int = Field(default=5)
+    slm_breaker_cooldown_seconds: float = Field(default=30.0)
+    # How long an outstanding budget reservation stays discoverable, and how old
+    # it must be before the reconciler treats it as abandoned.
+    budget_reservation_marker_ttl_seconds: int = Field(default=900)
+    budget_reservation_grace_seconds: int = Field(default=120)
+    budget_reconcile_interval_seconds: int = Field(default=60)
+    # /metrics is unauthenticated only in dev; set a token to scrape it anywhere
+    # else, since the exposition leaks verdict mix and volume.
+    metrics_auth_token: str = Field(default="")
+    # Fraction of A/B hard-denies that still get evaluated by Checks C/D in
+    # shadow mode, recorded but never enforced.
+    shadow_eval_sample_rate: float = Field(default=0.1, ge=0.0, le=1.0)
     api_auth_header: str = Field(default="x-agent-key")
     signature_tolerance_seconds: int = Field(default=300)
-    jwt_algorithm: str = Field(default="HS256")
-    jwt_secret: str = Field(default="dev-jwt-secret-change-me")
-    jwt_audience: str = Field(default="agentshield-api")
     agent_hmac_secret: str = Field(default="dev-agent-hmac-secret-change-me")
     webhook_hmac_secret: str = Field(default="dev-webhook-hmac-secret-change-me")
     anthropic_api_key: str = Field(default="")
@@ -26,9 +59,52 @@ class Settings(BaseSettings):
     hitl_email_from: str = Field(default="")
     hitl_email_to: str = Field(default="")
     api_public_url: str = Field(default="http://localhost:8000")
-    dev_user_token: str = Field(default="dev-user-token")
-    dev_user_sub: str = Field(default="dev-user-001")
-    dev_user_email: str = Field(default="dev-user@example.com")
+    cors_allowed_origins: str = Field(
+        default="http://localhost:5173,http://127.0.0.1:5173",
+        validation_alias=AliasChoices("CORS_ALLOWED_ORIGINS"),
+    )
+    cognito_region: str = Field(default="")
+    cognito_user_pool_id: str = Field(default="")
+    cognito_app_client_id: str = Field(default="")
+
+    @field_validator("postgres_dsn", mode="before")
+    @classmethod
+    def normalize_postgres_dsn(cls, value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        dsn = value.strip()
+        if dsn.startswith("postgres://"):
+            return "postgresql+psycopg://" + dsn[len("postgres://") :]
+        if dsn.startswith("postgresql+psycopg2://"):
+            return "postgresql+psycopg://" + dsn[len("postgresql+psycopg2://") :]
+        if dsn.startswith("postgresql://"):
+            return "postgresql+psycopg://" + dsn[len("postgresql://") :]
+        return dsn
+
+    @field_validator("cors_allowed_origins", mode="before")
+    @classmethod
+    def normalize_cors_allowed_origins(cls, value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        return value.strip()
+
+    @model_validator(mode="after")
+    def validate_secrets_for_environment(self) -> "Settings":
+        if self.app_env.lower() != "dev":
+            if self.webhook_hmac_secret == "dev-webhook-hmac-secret-change-me":
+                raise ValueError(
+                    "WEBHOOK_HMAC_SECRET must be set to a non-default value when APP_ENV is not dev"
+                )
+        return self
+
+    @property
+    def cors_origins(self) -> list[str]:
+        if not self.cors_allowed_origins:
+            return []
+        origins = [origin.strip().rstrip("/") for origin in self.cors_allowed_origins.split(",") if origin.strip()]
+        if "*" in origins:
+            return ["*"]
+        return origins
 
 
 @lru_cache(maxsize=1)

@@ -3,12 +3,23 @@ __pycache__/
 .ruff_cache/
 *.pyc
 .env*
+*.egg-info/
+*.db
+.DS_Store
 
 dashboard/node_modules/
 dashboard/dist/
 
 ARCHITECTURE.md
+CLAUDE.md
 
 .claude/
 .vite/
 
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars.local
+crash.log

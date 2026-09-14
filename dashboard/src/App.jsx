@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import AgentsPanel from "./components/AgentsPanel";
+import DocsPage from "./DocsPage";
 import {
   Activity,
   AlertTriangle,
@@ -20,19 +22,16 @@ import {
   YAxis,
 } from "recharts";
 import {
-  bootstrapOnboarding,
   createAgent as createAgentRequest,
   getActivity,
-  getAgent,
   getDashboardStats,
   getNotifications,
   getOnboardingChecklist,
   listAgents,
   resolveRequest,
-  startPhoneVerification,
-  submitSpendRequest,
-  updateHitlPreferences,
-  verifyPhone,
+  runDevTestRequest,
+  updateAgentSettings,
+  updateAgentScopes,
 } from "./lib/api";
 import { logout } from "./lib/auth";
 
@@ -49,9 +48,33 @@ const emptyChart = [
 function normalizeStatus(status) {
   if (status === "PENDING_HITL") return "PENDING";
   if (status === "BLOCKED") return "BLOCKED";
+  if (status === "EXPIRED") return "BLOCKED";
+  if (status === "APPROVED_EXECUTED") return "SAFE";
   if (status === "APPROVED_BY_HUMAN_EXECUTED") return "APPROVED";
   if (status === "DENIED_BY_HUMAN") return "DENIED";
   return "SAFE";
+}
+
+function isTerminalAuditStatus(status) {
+  return [
+    "APPROVED_EXECUTED",
+    "APPROVED_BY_HUMAN_EXECUTED",
+    "BLOCKED",
+    "DENIED_BY_HUMAN",
+    "EXPIRED",
+  ].includes(status);
+}
+
+function selectPreferredActivityItem(current, candidate) {
+  const currentTerminal = isTerminalAuditStatus(current.status);
+  const candidateTerminal = isTerminalAuditStatus(candidate.status);
+
+  // If a terminal row exists for the same request, prefer it over pending.
+  if (currentTerminal !== candidateTerminal) {
+    return candidateTerminal ? candidate : current;
+  }
+
+  return new Date(candidate.created_at) > new Date(current.created_at) ? candidate : current;
 }
 
 function buildChecklistRows(payload, prefix) {
@@ -66,7 +89,7 @@ const nav = [
   { key: "overview", label: "Overview", icon: Home },
   { key: "activity", label: "Activity", icon: Activity },
   { key: "approvals", label: "Approvals", icon: AlertTriangle, pending: true },
-  { key: "integration", label: "Integration", icon: ArrowUpRight },
+  { key: "docs", label: "Docs", icon: ArrowUpRight },
   { key: "settings", label: "Settings", icon: Settings },
 ];
 
@@ -116,8 +139,8 @@ function Toasts({ toasts }) {
 export default function App() {
   const [agents, setAgents] = useState([]);
   const [activeAgentId, setActiveAgentId] = useState("");
-  const [allAgents, setAllAgents] = useState([]);
   const [stats, setStats] = useState({ total: 0, blocked: 0, pending: 0, approved: 0 });
+  const [activityMeta, setActivityMeta] = useState({ totalToday: 0, countMode: "today_utc" });
   const [rows, setRows] = useState([]);
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -146,20 +169,14 @@ export default function App() {
     draftVendor: "",
     networks: ["base"],
     tokens: ["USDC"],
-  });
-  const [quickstartForm, setQuickstartForm] = useState({
-    userName: "",
-    email: "",
-    agentName: "",
+    scopes: [],
+    draftScope: "",
   });
   const [checklist, setChecklist] = useState(null);
   const [notes, setNotes] = useState({});
-  const [agentProfile, setAgentProfile] = useState(null);
-  const [phoneInput, setPhoneInput] = useState("");
-  const [otpInput, setOtpInput] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
-  const [smsToggle, setSmsToggle] = useState(false);
+  const [scopesSaving, setScopesSaving] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const activeAgentRef = useRef("");
 
   const pendingCount = approvals.length;
 
@@ -202,18 +219,39 @@ export default function App() {
         getActivity(agentId),
         getNotifications(agentId),
       ]);
+      if (agentId !== activeAgentRef.current) {
+        return;
+      }
       setStats({
-        total: statsResp.total_transactions_today,
+        total: activityResp.total_transactions_today ?? statsResp.total_transactions_today,
         blocked: statsResp.blocked,
         pending: statsResp.pending_approval,
         approved: statsResp.auto_approved,
       });
-      const newRows = activityResp.activity.map((item) => {
+      setActivityMeta({
+        totalToday: activityResp.total_transactions_today ?? 0,
+        countMode: activityResp.count_mode || "today_utc",
+      });
+      const preferredByRequest = activityResp.activity.reduce((acc, item) => {
+        const existing = acc.get(item.request_id);
+        if (!existing) {
+          acc.set(item.request_id, item);
+          return acc;
+        }
+        acc.set(item.request_id, selectPreferredActivityItem(existing, item));
+        return acc;
+      }, new Map());
+
+      const newRows = Array.from(preferredByRequest.values())
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+        .map((item) => {
         const slm = item.semantic_result || {};
+        const gd = item.goal_drift_result || {};
         return {
-          id: item.request_id,
+          id: `${item.request_id}-${item.created_at}`,
           time: new Date(item.created_at).toLocaleTimeString("en-US", { hour12: false }),
           status: normalizeStatus(item.status),
+          isReplay: Boolean(item.idempotency_replay),
           agent: agentId,
           vendor: item.vendor_url_or_name,
           amount: item.amount_cents / 100,
@@ -228,6 +266,12 @@ export default function App() {
               score: +(1 - Number(slm.risk_score ?? 50) / 100).toFixed(2),
               verdict: slm.alignment_label || item.verdict,
               reason: (slm.reason_codes || []).join(", ") || "No reason supplied",
+            },
+            goalDrift: {
+              skipped: gd.skipped ?? true,
+              within_scope: gd.within_scope ?? true,
+              matched_scope: gd.matched_scope ?? null,
+              reason: gd.reason ?? "",
             },
             raw: {
               request_id: item.request_id,
@@ -245,6 +289,7 @@ export default function App() {
         notificationResp.notifications.map((n) => {
           const payload = n.payload_json || {};
           const sem = payload.semantic_result || {};
+          const gd = payload.goal_drift_result || {};
           const score = +(1 - Number(sem.risk_score ?? 50) / 100).toFixed(2);
           return {
             id: n.id,
@@ -258,6 +303,12 @@ export default function App() {
             slmReason: (sem.reason_codes || payload.reasons || []).join(", "),
             redis: buildChecklistRows(payload.quantitative_result, "").map((r) => `${r[1]} ${r[0]} ${r[2]}`),
             policy: buildChecklistRows(payload.policy_result, "").map((r) => `${r[1]} ${r[0]} ${r[2]}`),
+            goalDrift: {
+              skipped: gd.skipped ?? true,
+              within_scope: gd.within_scope ?? true,
+              matched_scope: gd.matched_scope ?? null,
+              reason: gd.reason ?? "",
+            },
           };
         })
       );
@@ -283,18 +334,16 @@ export default function App() {
       try {
         const data = await listAgents();
         setAgents(data.agents);
-        setAllAgents(data.agents);
         if (data.agents.length > 0) {
           const storedMap = (() => { try { return JSON.parse(localStorage.getItem("agentshield_creds_map") || "{}"); } catch { return {}; } })();
           const match = Object.keys(storedMap).find((id) => data.agents.find((a) => a.agent_id === id));
           const first = match || data.agents[0].agent_id;
+          activeAgentRef.current = first;
           setActiveAgentId(first);
-          setPage("integration");
+          setPage("agents");
           await refresh(first, true);
           await refreshChecklist(first);
         } else {
-          localStorage.removeItem("agentshield_creds_map");
-          setCredsMap({});
           setPage("agents");
         }
       } catch (err) {
@@ -308,21 +357,12 @@ export default function App() {
 
   useEffect(() => {
     if (!activeAgentId) return;
+    activeAgentRef.current = activeAgentId;
     const timer = setInterval(() => {
       refresh(activeAgentId).catch(() => {});
     }, 2000);
     return () => clearInterval(timer);
   }, [activeAgentId, refresh, refreshChecklist]);
-
-  useEffect(() => {
-    if (!activeAgentId) return;
-    getAgent(activeAgentId).then((a) => {
-      if (!a) return;
-      setAgentProfile(a);
-      setSmsToggle(a.hitl_sms_fallback_high_risk || false);
-      setPhoneInput(a.hitl_phone_number || "");
-    }).catch(() => {});
-  }, [activeAgentId]);
 
   const resolve = (approvalId, decision) => {
     const ap = approvals.find((a) => String(a.id) === String(approvalId));
@@ -340,15 +380,30 @@ export default function App() {
     e.preventDefault();
     if (loading) return;
     if (!form.name || form.daily === "" || form.perTx === "" || form.auto === "") return;
+    const dailyUsd = Math.trunc(Number(form.daily));
+    const perTxnUsd = Math.trunc(Number(form.perTx));
+    const autoApproveUsd = Math.trunc(Number(form.auto));
+    if (
+      !Number.isFinite(dailyUsd) ||
+      !Number.isFinite(perTxnUsd) ||
+      !Number.isFinite(autoApproveUsd) ||
+      dailyUsd < 0 ||
+      perTxnUsd < 0 ||
+      autoApproveUsd < 0
+    ) {
+      toast("Spend limits must be non-negative numbers.");
+      return;
+    }
     createAgentRequest({
       agent_name: form.name,
-      daily_spend_limit_usd: Number(form.daily),
-      per_transaction_limit_usd: Number(form.perTx),
-      auto_approve_under_usd: Number(form.auto),
+      daily_spend_limit_usd: dailyUsd,
+      per_transaction_limit_usd: perTxnUsd,
+      auto_approve_under_usd: autoApproveUsd,
       blocked_vendors: form.blocked,
       asset_type: form.asset,
       allowed_networks: form.networks,
       allowed_tokens: form.tokens,
+      allowed_scopes: form.scopes,
     })
       .then(async (res) => {
         setCredsMap((prev) => {
@@ -359,68 +414,52 @@ export default function App() {
         setShowSuccess(true);
         const data = await listAgents();
         setAgents(data.agents);
-        setAllAgents(data.agents);
+        activeAgentRef.current = res.agent_id;
         setActiveAgentId(res.agent_id);
+        setShowNewAgentForm(false);
+        setForm({
+          name: "",
+          daily: "",
+          perTx: "",
+          auto: "",
+          asset: "STABLECOIN",
+          blocked: [],
+          draftVendor: "",
+          networks: ["base"],
+          tokens: ["USDC"],
+          scopes: [],
+          draftScope: "",
+        });
         await refresh(res.agent_id, true);
         await refreshChecklist(res.agent_id);
       })
       .catch((err) => toast(err.message || "Create agent failed"));
   };
 
-  const runQuickstartBootstrap = (e) => {
-    e.preventDefault();
-    if (!quickstartForm.userName || !quickstartForm.email || !quickstartForm.agentName) {
-      toast("Enter name, email, and agent name");
-      return;
-    }
-    bootstrapOnboarding({
-      user_name: quickstartForm.userName,
-      email: quickstartForm.email,
-      agent_name: quickstartForm.agentName,
-      daily_spend_limit_usd: 500,
-      per_transaction_limit_usd: 100,
-      auto_approve_under_usd: 25,
-      allowed_networks: ["base"],
-      allowed_tokens: ["USDC"],
-      blocked_vendors: ["badvendor.example"],
-    })
-      .then(async (res) => {
-        setCredsMap((prev) => {
-          const next = { ...prev, [res.agent_id]: res.hmac_secret };
-          localStorage.setItem("agentshield_creds_map", JSON.stringify(next));
-          return next;
-        });
-        setShowSuccess(true);
-        setShowNewAgentForm(false);
-        const data = await listAgents();
-        setAgents(data.agents);
-        setAllAgents(data.agents);
-        setActiveAgentId(res.agent_id);
-        await refresh(res.agent_id, true);
-        await refreshChecklist(res.agent_id);
-        toast("Agent created");
-      })
-      .catch((err) => toast(err.message || "Bootstrap failed"));
-  };
-
   const runSafeTest = () => {
     if (!activeAgentId || safeRunning) return;
     setSafeRunning(true);
     toast("Running SAFE test…");
-    submitSpendRequest(activeAgentId, {
+    const safeAddr = "0x" + crypto.getRandomValues(new Uint8Array(20)).reduce((s, b) => s + b.toString(16).padStart(2, "0"), "");
+    runDevTestRequest(activeAgentId, {
       agent_id: activeAgentId,
-      declared_goal: "Book flight to NYC conference",
+      declared_goal: "Pay contractor invoice for logo design work",
       amount_cents: 100,
       currency: "USD",
-      vendor_url_or_name: "Delta Airlines",
-      item_description: "Economy seat JFK-LAX",
+      vendor_url_or_name: "contractor.eth",
+      item_description: "Logo design invoice #12",
       asset_type: "STABLECOIN",
       stablecoin_symbol: "USDC",
       network: "base",
-      destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
+      destination_address: safeAddr,
       idempotency_key: `quick-safe-${Date.now()}`,
-      dev_slm_preset: "ALIGNED",
     })
+      .then((result) => {
+        if (result?.idempotency_replay) {
+          toast("⚠ Replay detected: cached AgentShield decision returned (no new evaluation).");
+        }
+        return result;
+      })
       .then(() => Promise.all([refresh(activeAgentId, true), refreshChecklist(activeAgentId)]))
       .then(() => toast("✓ SAFE test complete"))
       .catch((err) => toast(err.message || "SAFE test failed"))
@@ -431,20 +470,26 @@ export default function App() {
     if (!activeAgentId || hitlRunning) return;
     setHitlRunning(true);
     toast("Running HITL test…");
-    submitSpendRequest(activeAgentId, {
+    const hitlAddr = "0x" + crypto.getRandomValues(new Uint8Array(20)).reduce((s, b) => s + b.toString(16).padStart(2, "0"), "");
+    runDevTestRequest(activeAgentId, {
       agent_id: activeAgentId,
-      declared_goal: "Book flight to NYC conference",
-      amount_cents: 500,
+      declared_goal: "Subscribe to GitHub Enterprise for the engineering team",
+      amount_cents: 50000,
       currency: "USD",
-      vendor_url_or_name: "Uber Eats",
-      item_description: "Large dinner order",
+      vendor_url_or_name: "github.com",
+      item_description: "GitHub Enterprise Cloud annual subscription",
       asset_type: "STABLECOIN",
       stablecoin_symbol: "USDC",
       network: "base",
-      destination_address: "0x742d35Cc6634C0532925a3b8D4C9A6b52E7A1f1",
+      destination_address: hitlAddr,
       idempotency_key: `quick-suspicious-${Date.now()}`,
-      dev_slm_preset: "WEAK",
     })
+      .then((result) => {
+        if (result?.idempotency_replay) {
+          toast("⚠ Replay detected: cached AgentShield decision returned (no new evaluation).");
+        }
+        return result;
+      })
       .then(() => Promise.all([refresh(activeAgentId, true), refreshChecklist(activeAgentId)]))
       .then(() => {
         setPage("approvals");
@@ -460,6 +505,49 @@ export default function App() {
     setForm((p) => ({ ...p, blocked: Array.from(new Set([...p.blocked, v])), draftVendor: "" }));
   };
 
+  const addScope = () => {
+    const scope = form.draftScope.trim();
+    if (!scope) return;
+    setForm((p) => ({ ...p, scopes: Array.from(new Set([...p.scopes, scope])), draftScope: "" }));
+  };
+
+  const removeScope = (scope) => {
+    setForm((p) => ({ ...p, scopes: p.scopes.filter((item) => item !== scope) }));
+  };
+
+  const saveAgentScopes = async (scopes) => {
+    if (!activeAgentId) return;
+    try {
+      setScopesSaving(true);
+      await updateAgentScopes(activeAgentId, scopes);
+      const data = await listAgents();
+      setAgents(data.agents);
+      toast("Goal scopes updated");
+      await refresh(activeAgentId, true);
+    } catch (err) {
+      toast(err.message || "Could not update scopes");
+    } finally {
+      setScopesSaving(false);
+    }
+  };
+
+  const saveAgentSettings = async (settingsPayload) => {
+    if (!activeAgentId) return;
+    try {
+      setSettingsSaving(true);
+      await updateAgentSettings(activeAgentId, settingsPayload);
+      const data = await listAgents();
+      setAgents(data.agents);
+      toast("Agent settings updated");
+      await refresh(activeAgentId, true);
+    } catch (err) {
+      toast(err.message || "Could not update agent settings");
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const activeAgent = agents.find((agent) => agent.agent_id === activeAgentId) || null;
   const effectiveAgentId = activeAgentId || "agt_your_agent_id";
   const activeHmac = credsMap[activeAgentId] || "";
   const effectiveSecret = secretReveal ? (activeHmac || "<your-hmac-secret>") : "<your-hmac-secret>";
@@ -597,7 +685,7 @@ print(response.status_code, response.text)`;
         </div>
       </aside>
 
-      <main style={{ flex: 1, overflowY: "auto", background: "var(--bg)" }}>
+      <main style={{ flex: 1, overflowY: page === "docs" ? "hidden" : "auto", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
         <header style={{ height: 48, borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px" }}>
           <div style={{ fontFamily: "var(--font-mono)", fontSize: 13, color: "var(--text-1)" }}>{pageTitle}</div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -605,6 +693,7 @@ print(response.status_code, response.text)`;
               <select
                 value={activeAgentId}
                 onChange={(e) => {
+                  activeAgentRef.current = e.target.value;
                   setActiveAgentId(e.target.value);
                   refresh(e.target.value, true).catch(() => {});
                   refreshChecklist(e.target.value).catch(() => {});
@@ -637,59 +726,26 @@ print(response.status_code, response.text)`;
           </div>
         </header>
 
-        <section style={{ padding: 24 }}>
-          {page === "integration" ? (
-            <div style={{ maxWidth: 900 }}>
-              <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
-                <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)", marginBottom: 8 }}>
-                  Agent Integration (Primary)
-                </div>
-                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>
-                  Agents should call `POST /v1/spend-request` directly from their workflow. This is the production path.
-                </div>
-                <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
-                  endpoint: {apiBase}/spend-request
-                </div>
-                <div style={{ marginTop: 6, fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
-                  agent_id: {effectiveAgentId}
-                </div>
-              </div>
+        {page === "docs" ? (
+          <div style={{ flex: 1, overflow: "hidden" }}>
+            <DocsPage
+              agentId={effectiveAgentId}
+              activeHmac={activeHmac}
+              secretReveal={secretReveal}
+              setSecretReveal={setSecretReveal}
+              apiBase={apiBase}
+            />
+          </div>
+        ) : null}
 
-              <div style={{ border: "1px solid var(--border)", padding: 12, marginBottom: 12 }}>
-                <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 8 }}>Signing Rules</div>
-                <div style={{ fontSize: 11, color: "var(--text-1)", fontFamily: "var(--font-mono)", marginBottom: 8 }}>
-                  canonical = METHOD + "\n" + PATH + "\n" + x-timestamp + "\n" + sha256(body) + "\n" + x-agent-id
-                </div>
-                <div style={{ fontSize: 11, color: "var(--text-3)" }}>
-                  Send `x-agent-id`, `x-timestamp`, and `x-signature` (HMAC-SHA256). In local dev, you can still use `x-agent-key: local-dev-key`.
-                </div>
-              </div>
-
-              <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                  <div style={{ fontSize: 12, color: "var(--text-2)" }}>Generated Python Snippet</div>
-                  <button
-                    onClick={() => navigator.clipboard.writeText(integrationPython)}
-                    disabled={!secretReveal}
-                    title={!secretReveal ? "Reveal your HMAC secret first" : "Copy snippet"}
-                    style={{ border: "none", background: "transparent", color: secretReveal ? "var(--text-2)" : "var(--text-3)", fontSize: 11, cursor: secretReveal ? "pointer" : "not-allowed" }}
-                  >
-                    {secretReveal ? "[copy]" : "[reveal secret to copy]"}
-                  </button>
-                </div>
-                <pre style={{ margin: 0, fontSize: 11, fontFamily: "var(--font-mono)", color: "var(--text-1)", whiteSpace: "pre-wrap" }}>
-                  {integrationPython}
-                </pre>
-              </div>
-            </div>
-          ) : null}
+        <section style={{ padding: 24, display: page === "docs" ? "none" : undefined }}>
 
 
           {page === "overview" ? (
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 8 }}>
                 {[
-                  ["transactions", stats.total, "today", "var(--text-1)"],
+                  ["transactions", stats.total, activityMeta.countMode === "today_utc" ? "today (UTC)" : "current scope", "var(--text-1)"],
                   ["blocked", stats.blocked, "", "var(--red)"],
                   ["pending", stats.pending, "", "var(--amber)"],
                   ["approved", stats.approved, "", "var(--green)"],
@@ -735,7 +791,9 @@ print(response.status_code, response.text)`;
                 {rows.slice(0, 5).map((r) => (
                   <div key={r.id} className="cell" style={{ display: "grid", gridTemplateColumns: "100px 160px 1fr 100px 80px", alignItems: "center", height: 36, padding: "0 12px", fontSize: 12, minWidth: 0 }}>
                     <div style={{ fontFamily: "var(--font-mono)", color: "var(--text-2)" }}>{r.time}</div>
-                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.vendor}</div>
+                    <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {r.vendor} {r.isReplay ? <span style={{ color: "var(--amber)" }}>[replay]</span> : null}
+                    </div>
                     <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: "var(--text-2)", fontStyle: "italic" }}>{r.goal}</div>
                     <div style={{ fontFamily: "var(--font-mono)", textAlign: "right" }}>${r.amount.toFixed(2)}</div>
                     <div style={{ color: "var(--text-3)", textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.network}</div>
@@ -768,6 +826,9 @@ print(response.status_code, response.text)`;
                     </button>
                   ))}
                 </div>
+                <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>
+                  {activityMeta.countMode === "today_utc" ? "today_utc" : activityMeta.countMode} · total {activityMeta.totalToday}
+                </div>
               </div>
               <div style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "82px 92px 112px 1fr 116px 78px 1fr 20px", padding: "6px 12px", fontSize: 11, color: "var(--text-3)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
@@ -789,6 +850,11 @@ print(response.status_code, response.text)`;
                             {r.status === "PENDING" ? <span className="dotPulse" /> : null}
                             {statusLabel(r.status)}
                           </span>
+                          {r.isReplay ? (
+                            <span style={{ marginLeft: 6, fontSize: 10, color: "var(--amber)", fontFamily: "var(--font-mono)" }}>
+                              REPLAY
+                            </span>
+                          ) : null}
                         </div>
                         <div className="ellipsis" style={{ color: "var(--text-2)" }}>{r.agent}</div>
                         <div className="ellipsis" style={{ color: "var(--text-1)", fontSize: 13 }}>{r.vendor}</div>
@@ -807,10 +873,18 @@ print(response.status_code, response.text)`;
                             {r.details.redis.map(([k, s, v]) => <div key={k} style={{ display: "grid", gridTemplateColumns: "140px 20px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>{k}</span><span>{s}</span><span>{v}</span></div>)}
                             <div style={{ color: "var(--text-2)", fontSize: 11, margin: "6px 0 6px" }}>Check B · Policy</div>
                             {r.details.policy.map(([k, s, v]) => <div key={k} style={{ display: "grid", gridTemplateColumns: "140px 20px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>{k}</span><span>{s}</span><span>{v}</span></div>)}
-                            <div style={{ color: "var(--text-2)", fontSize: 11, margin: "6px 0 6px" }}>Check C · SLM</div>
+                            <div style={{ color: "var(--text-2)", fontSize: 11, margin: "6px 0 6px" }}>Check C · Semantic</div>
                             <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>alignment score</span><span>{r.details.slm.score}</span></div>
                             <div style={{ display: "grid", gridTemplateColumns: "140px 1fr", marginBottom: 3 }}><span style={{ color: "var(--text-2)" }}>verdict</span><span>{r.details.slm.verdict}</span></div>
                             <div style={{ display: "grid", gridTemplateColumns: "140px 1fr" }}><span style={{ color: "var(--text-2)" }}>reason</span><span>{r.details.slm.reason}</span></div>
+                            <div style={{ color: "var(--text-2)", fontSize: 11, margin: "6px 0 6px" }}>Check D · Goal Drift</div>
+                            {r.details.goalDrift.skipped ? (
+                              <div style={{ color: "var(--text-3)" }}>skipped — no scopes defined</div>
+                            ) : r.details.goalDrift.within_scope ? (
+                              <div style={{ display: "grid", gridTemplateColumns: "140px 1fr" }}><span style={{ color: "var(--text-2)" }}>matched scope</span><span style={{ color: "var(--green)" }}>✓ {r.details.goalDrift.matched_scope || "within scope"}</span></div>
+                            ) : (
+                              <div style={{ color: "var(--red)" }}>✗ GOAL_DRIFT_DETECTED — {r.details.goalDrift.reason || "goal outside allowed scopes"}</div>
+                            )}
                           </div>
                           <div>
                             <button onClick={() => setRawOpen((p) => (p === r.id ? null : r.id))} style={{ background: "transparent", border: "none", color: "var(--text-2)", fontSize: 11, cursor: "pointer", padding: 0 }}>
@@ -874,7 +948,7 @@ print(response.status_code, response.text)`;
                         <div style={{ borderTop: "1px solid var(--border)", borderBottom: "1px solid var(--border)", padding: 10, fontSize: 12 }}>
                           <div style={{ color: "var(--text-2)", marginBottom: 8 }}>SIGNALS</div>
                           <div style={{ display: "grid", gridTemplateColumns: "84px 1fr", marginBottom: 8 }}>
-                            <span style={{ color: "var(--text-2)" }}>SLM Score</span>
+                            <span style={{ color: "var(--text-2)" }}>Semantic Score</span>
                             <div>
                               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4, fontFamily: "var(--font-mono)", fontSize: 12 }}>
                                 <span>{a.slmScore.toFixed(2)}</span><span>{a.slmVerdict}</span>
@@ -889,9 +963,20 @@ print(response.status_code, response.text)`;
                             <span style={{ color: "var(--text-2)" }}>Redis</span>
                             <div>{a.redis.map((s) => <div key={s}>{s}</div>)}</div>
                           </div>
-                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr" }}>
+                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr", marginBottom: 8 }}>
                             <span style={{ color: "var(--text-2)" }}>Policy</span>
                             <div>{a.policy.map((s) => <div key={s}>{s}</div>)}</div>
+                          </div>
+                          <div style={{ display: "grid", gridTemplateColumns: "84px 1fr" }}>
+                            <span style={{ color: "var(--text-2)" }}>Goal Drift</span>
+                            <div>
+                              {a.goalDrift.skipped
+                                ? <span style={{ color: "var(--text-3)" }}>skipped — no scopes</span>
+                                : a.goalDrift.within_scope
+                                  ? <span style={{ color: "var(--green)" }}>✓ {a.goalDrift.matched_scope || "within scope"}</span>
+                                  : <span style={{ color: "var(--red)" }}>✗ drift — {a.goalDrift.reason || "outside allowed scopes"}</span>
+                              }
+                            </div>
                           </div>
                         </div>
                         <div style={{ padding: 10 }}>
@@ -929,176 +1014,33 @@ print(response.status_code, response.text)`;
           ) : null}
 
           {page === "agents" ? (
-            <div style={{ maxWidth: 560 }}>
-              {activeAgentId && activeHmac && !showNewAgentForm ? (
-                <>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                    <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)" }}>Active Agent</div>
-                    <button type="button" onClick={() => { setShowNewAgentForm(true); setShowSuccess(false); }} style={{ height: 28, border: "1px solid var(--border)", background: "transparent", color: "var(--text-2)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}>+ New Agent</button>
-                  </div>
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>agent_id</div>
-                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                      <span>{activeAgentId}</span>
-                      <button onClick={() => navigator.clipboard.writeText(activeAgentId)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
-                    </div>
-                  </div>
-                  <div style={{ marginBottom: 16 }}>
-                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>hmac_secret</div>
-                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                      <span>{secretReveal ? activeHmac : "•••••••••••••••••••••••••••"}</span>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={() => navigator.clipboard.writeText(activeHmac)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
-                        <button onClick={() => setSecretReveal(p => !p)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[{secretReveal ? "hide" : "reveal"}]</button>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              ) : null}
-              {(!activeAgentId || !activeHmac || showNewAgentForm) ? (
-                <>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-                    <div style={{ fontSize: 13, color: "var(--text-1)", fontFamily: "var(--font-mono)" }}>New Agent</div>
-                    {activeHmac && <button type="button" onClick={() => { setShowNewAgentForm(false); setShowSuccess(false); }} style={{ height: 28, border: "none", background: "transparent", color: "var(--text-2)", fontFamily: "var(--font-mono)", fontSize: 11, cursor: "pointer" }}>← Back</button>}
-                  </div>
-              {!showSuccess ? (
-                <form onSubmit={handleCreateAgent}>
-                  {[
-                    ["Agent Name", "name", "my-booking-agent", false, null],
-                    ["Daily Spend Limit", "daily", "500", true, "Max total USD per day. Set 0 for no limit."],
-                    ["Per-Transaction Limit", "perTx", "200", true, "Max USD per transaction. Set 0 for no limit."],
-                    ["Auto-Approve Under", "auto", "25", true, "Transactions below this USD amount skip HITL review. Set 0 to require review for all."],
-                  ].map(([label, key, ph, numeric, hint]) => (
-                    <div key={key} style={{ marginBottom: 12 }}>
-                      <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                        {label}{numeric ? <span style={{ color: "var(--text-3)", textTransform: "none", marginLeft: 6 }}>USD</span> : null}
-                      </label>
-                      {hint ? <div style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 4 }}>{hint}</div> : null}
-                      <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-                        {numeric ? <span style={{ position: "absolute", left: 10, fontSize: 13, color: "var(--text-2)", fontFamily: "var(--font-mono)", pointerEvents: "none" }}>$</span> : null}
-                        <input
-                          type={numeric ? "number" : "text"}
-                          min={numeric ? 0 : undefined}
-                          step={numeric ? 1 : undefined}
-                          value={form[key]}
-                          placeholder={ph}
-                          onChange={(e) => setForm((p) => ({ ...p, [key]: e.target.value }))}
-                          style={{ width: "100%", height: 36, background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-1)", borderRadius: 4, paddingLeft: numeric ? 22 : 12, paddingRight: 12, fontSize: 13, fontFamily: "var(--font-mono)" }}
-                          className="fast"
-                        />
-                      </div>
-                    </div>
-                  ))}
-                  <div style={{ marginBottom: 12 }}>
-                    <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Asset Type</label>
-                    <div style={{ display: "flex", gap: 8 }}>
-                      {["STABLECOIN", "FIAT"].map((asset) => (
-                        <button key={asset} type="button" onClick={() => setForm((p) => ({ ...p, asset }))} style={{ height: 30, padding: "0 10px", border: "1px solid var(--border)", background: form.asset === asset ? "var(--bg-overlay)" : "var(--bg-raised)", color: "var(--text-1)", borderRadius: 4, fontSize: 12, fontFamily: "var(--font-mono)" }}>
-                          {asset}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {form.asset === "STABLECOIN" ? (
-                    <>
-                      <div style={{ marginBottom: 12 }}>
-                        <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Networks</label>
-                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12, color: "var(--text-2)" }}>
-                          {["ethereum", "base", "solana", "polygon", "arbitrum"].map((n) => (
-                            <label key={n} style={{ display: "inline-flex", gap: 6, alignItems: "center", textTransform: "lowercase" }}>
-                              <input type="checkbox" checked={form.networks.includes(n)} onChange={() => setForm((p) => ({ ...p, networks: p.networks.includes(n) ? p.networks.filter((x) => x !== n) : [...p.networks, n] }))} />
-                              {n}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                      <div style={{ marginBottom: 12 }}>
-                        <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Tokens</label>
-                        <div style={{ display: "flex", gap: 8 }}>
-                          {["USDC", "USDT"].map((t) => (
-                            <button key={t} type="button" onClick={() => setForm((p) => ({ ...p, tokens: p.tokens.includes(t) ? p.tokens.filter((x) => x !== t) : [...p.tokens, t] }))} style={{ height: 28, padding: "0 10px", border: "1px solid var(--border)", background: form.tokens.includes(t) ? "var(--bg-overlay)" : "var(--bg-raised)", color: "var(--text-1)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 11 }}>
-                              {t}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  ) : null}
-                  <div style={{ marginBottom: 12 }}>
-                    <label style={{ display: "block", marginBottom: 4, fontSize: 11, color: "var(--text-2)", textTransform: "uppercase", letterSpacing: "0.08em" }}>Blocked Vendors</label>
-                    <input
-                      value={form.draftVendor}
-                      onChange={(e) => setForm((p) => ({ ...p, draftVendor: e.target.value }))}
-                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addBlockedVendor(); } }}
-                      style={{ width: "100%", height: 36, background: "var(--bg-raised)", border: "1px solid var(--border)", color: "var(--text-1)", borderRadius: 4, padding: "0 12px", fontSize: 13, fontFamily: "var(--font-mono)" }}
-                      className="fast"
-                    />
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6 }}>
-                      {form.blocked.map((v) => (
-                        <button key={v} type="button" onClick={() => setForm((p) => ({ ...p, blocked: p.blocked.filter((x) => x !== v) }))} style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", color: "var(--text-2)", borderRadius: 4, fontSize: 11, fontFamily: "var(--font-mono)", padding: "3px 6px" }}>
-                          {v} ×
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <button type="submit" style={{ height: 36, padding: "0 16px", border: "1px solid var(--text-1)", background: "var(--text-1)", color: "var(--bg)", borderRadius: 4, fontFamily: "var(--font-mono)", fontSize: 13, fontWeight: 500, cursor: "pointer" }}>
-                    Create Agent
-                  </button>
-                </form>
-              ) : (
-                <div>
-                  <div style={{ fontSize: 14, color: "var(--text-1)", fontFamily: "var(--font-mono)", fontWeight: 500, marginBottom: 10 }}>Agent created.</div>
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>agent_id</div>
-                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                      <span>{activeAgentId}</span>
-                      <button onClick={() => navigator.clipboard.writeText(activeAgentId)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
-                    </div>
-                  </div>
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>hmac_secret</div>
-                    <div style={{ border: "1px solid var(--border)", background: "var(--bg-raised)", padding: "8px 10px", display: "flex", justifyContent: "space-between", fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                      <span>{secretReveal ? activeHmac : "•••••••••••••••••••••••••••"}</span>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button onClick={() => navigator.clipboard.writeText(activeHmac)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
-                        <button onClick={() => setSecretReveal((p) => !p)} style={{ border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[reveal]</button>
-                      </div>
-                    </div>
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>Integration</div>
-                  <div style={{ border: "1px solid var(--border)", background: "var(--bg-overlay)", padding: "8px 10px", fontFamily: "var(--font-mono)", fontSize: 12, position: "relative" }}>
-                    <button onClick={() => navigator.clipboard.writeText(`curl -X POST https://api.agentshield.com/v1/spend-request -H "x-agent-id: ${activeAgentId}" -H "x-signature: <hmac>" -d '{"declared_goal":"...","amount_cents":4900}'`)} style={{ position: "absolute", right: 8, top: 8, border: "none", background: "transparent", color: "var(--text-2)", fontSize: 11, cursor: "pointer" }}>[copy]</button>
-                    <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{`curl -X POST \\
-  https://api.agentshield.com/v1/spend-request \\
-  -H "x-agent-id: ${activeAgentId}" \\
-  -H "x-signature: <hmac>" \\
-  -d '{"declared_goal":"...","amount_cents":4900}'`}</pre>
-                  </div>
-                  <button onClick={() => setPage("activity")} style={{ marginTop: 10, border: "none", background: "transparent", color: "var(--text-2)", fontSize: 12, cursor: "pointer" }}>
-                    → View Activity
-                  </button>
-                </div>
-              )}
-                </>
-              ) : null}
-
-              {activeAgentId && (
-                <div style={{ border: "1px solid var(--border)", padding: 12, marginTop: 16 }}>
-                  <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 10 }}>Developer Tools</div>
-                  <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                    <button type="button" onClick={runSafeTest} disabled={safeRunning}
-                      style={{ height: 30, border: `1px solid ${safeRunning ? "var(--border)" : "var(--green)"}`, background: safeRunning ? "transparent" : "rgba(0,200,83,0.12)", color: safeRunning ? "var(--text-3)" : "var(--green)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: safeRunning ? "not-allowed" : "pointer" }}>
-                      {safeRunning ? "running…" : "Run SAFE Test"}
-                    </button>
-                    <button type="button" onClick={runSuspiciousTest} disabled={hitlRunning}
-                      style={{ height: 30, border: `1px solid ${hitlRunning ? "var(--border)" : "var(--amber)"}`, background: hitlRunning ? "transparent" : "rgba(255,149,0,0.12)", color: hitlRunning ? "var(--text-3)" : "var(--amber)", padding: "0 10px", fontFamily: "var(--font-mono)", fontSize: 11, cursor: hitlRunning ? "not-allowed" : "pointer" }}>
-                      {hitlRunning ? "running…" : "Run HITL Test"}
-                    </button>
-                  </div>
-                  <div style={{ fontSize: 11, color: "var(--text-3)", fontFamily: "var(--font-mono)" }}>active_agent: {activeAgentId}</div>
-                </div>
-              )}
-            </div>
+            <AgentsPanel
+              agents={agents}
+              activeAgent={activeAgent}
+              activeAgentId={activeAgentId}
+              activeHmac={activeHmac}
+              form={form}
+              onFormChange={setForm}
+              showSuccess={showSuccess}
+              showNewAgentForm={showNewAgentForm}
+              secretReveal={secretReveal}
+              onToggleSecret={() => setSecretReveal((prev) => !prev)}
+              onShowNewAgent={() => { setShowNewAgentForm(true); setShowSuccess(false); }}
+              onHideNewAgent={() => { setShowNewAgentForm(false); setShowSuccess(false); }}
+              onCreateAgent={handleCreateAgent}
+              onAddBlockedVendor={addBlockedVendor}
+              onAddScope={addScope}
+              onRemoveScope={removeScope}
+              onRunSafeTest={runSafeTest}
+              onRunSuspiciousTest={runSuspiciousTest}
+              safeRunning={safeRunning}
+              hitlRunning={hitlRunning}
+              onGoToActivity={() => setPage("activity")}
+              onSaveScopes={saveAgentScopes}
+              scopesSaving={scopesSaving}
+              onSaveSettings={saveAgentSettings}
+              settingsSaving={settingsSaving}
+            />
           ) : null}
 
           {page === "settings" ? (

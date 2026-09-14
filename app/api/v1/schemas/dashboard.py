@@ -53,10 +53,14 @@ class ActivityItem(BaseModel):
     quantitative_result: dict
     policy_result: dict
     semantic_result: dict
+    goal_drift_result: dict
+    idempotency_replay: bool = False
 
 
 class ActivityFeedResponse(BaseModel):
     agent_id: str
+    total_transactions_today: int
+    count_mode: Literal["today_utc", "all_time", "range_utc"]
     activity: list[ActivityItem]
 
 

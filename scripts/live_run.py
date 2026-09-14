@@ -122,7 +122,6 @@ r = post("/spend-request", {
     "vendor_url_or_name": "Uber Eats",
     "item_description": "Large dinner order",
     "idempotency_key": f"live-susp-{int(time.time())}",
-    "dev_slm_preset": "WEAK",
 })
 body = r.json()
 info(f"HTTP {r.status_code}")

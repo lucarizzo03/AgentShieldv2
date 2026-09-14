@@ -2,15 +2,19 @@ import hashlib
 import hmac
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 
 import jwt
 from fastapi import Header, HTTPException, Request, status
-from sqlmodel import Session, select
+from fastapi.concurrency import run_in_threadpool
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.config import get_settings
-from app.db.postgres import engine
+from app.db.postgres import async_engine
 from app.models.agent import Agent
+from app.models.user import User
 
 
 @dataclass(slots=True)
@@ -26,9 +30,12 @@ class UserAuthContext:
     sub: str
     email: str | None
     display_name: str | None
-    method: str = "dev-user-token"
+    method: str = "cognito"
     agent_id: str | None = None
     claims: dict[str, Any] = field(default_factory=dict)
+
+
+JWKS_FETCH_TIMEOUT_SECONDS = 5
 
 
 def _normalize_signature(signature: str) -> str:
@@ -61,34 +68,140 @@ def _verify_hmac(secret: str, message: str, signature: str) -> bool:
     return hmac.compare_digest(expected, _normalize_signature(signature))
 
 
-def _verify_jwt_bearer(token: str) -> AuthContext:
+def _cognito_issuer() -> str:
     settings = get_settings()
+    if not settings.cognito_region or not settings.cognito_user_pool_id:
+        return ""
+    return f"https://cognito-idp.{settings.cognito_region}.amazonaws.com/{settings.cognito_user_pool_id}"
+
+
+@lru_cache(maxsize=1)
+def _cognito_jwks_client(issuer: str) -> jwt.PyJWKClient:
+    return jwt.PyJWKClient(
+        f"{issuer.rstrip('/')}/.well-known/jwks.json",
+        cache_keys=True,
+        timeout=JWKS_FETCH_TIMEOUT_SECONDS,
+    )
+
+
+def _verify_cognito_bearer(token: str) -> UserAuthContext:
+    settings = get_settings()
+    issuer = _cognito_issuer()
+    if not issuer or not settings.cognito_app_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Cognito is not configured for this environment",
+        )
     try:
+        signing_key = _cognito_jwks_client(issuer).get_signing_key_from_jwt(token).key
+        # Cognito access tokens carry no standard `aud` claim (unlike Auth0) —
+        # audience is instead enforced below via the `client_id` claim.
         claims = jwt.decode(
             token,
-            settings.jwt_secret,
-            algorithms=[settings.jwt_algorithm],
-            audience=settings.jwt_audience,
+            signing_key,
+            algorithms=["RS256"],
+            issuer=issuer,
+            options={"verify_aud": False},
         )
+    except jwt.PyJWKClientError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to reach the identity provider; retry shortly",
+        ) from exc
+    except jwt.ExpiredSignatureError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cognito token has expired",
+        ) from exc
     except jwt.InvalidTokenError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid JWT token",
+            detail="Invalid Cognito token",
         ) from exc
-
-    agent_id = claims.get("agent_id") or claims.get("sub")
-    if not isinstance(agent_id, str) or not agent_id:
+    if claims.get("token_use") != "access":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="JWT missing agent identity",
+            detail="Cognito token is not an access token",
         )
-
-    return AuthContext(
-        principal_id=str(claims.get("sub", agent_id)),
-        method="jwt",
-        agent_id=agent_id,
+    if claims.get("client_id") != settings.cognito_app_client_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cognito token was not issued for this app client",
+        )
+    sub = claims.get("sub")
+    if not isinstance(sub, str) or not sub:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Cognito token missing subject",
+        )
+    # Cognito access tokens (unlike Auth0's) carry no email/name claims; callers
+    # fall back to a placeholder email via get_or_create_user until/unless a
+    # separate /oauth2/userInfo lookup is added.
+    email = claims.get("email")
+    display_name = claims.get("name")
+    return UserAuthContext(
+        sub=sub,
+        email=email if isinstance(email, str) else None,
+        display_name=display_name if isinstance(display_name, str) else None,
+        method="cognito",
         claims=claims,
     )
+
+
+async def _load_agent_hmac_secret(agent_id: str) -> str:
+    async with AsyncSession(async_engine) as session:
+        agent = (await session.exec(select(Agent).where(Agent.agent_id == agent_id))).first()
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unknown agent_id",
+        )
+    if not agent.hmac_secret:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Agent has no HMAC secret — rotate credentials first",
+        )
+    return agent.hmac_secret
+
+
+async def _assert_agent_owned_by_subject(session: AsyncSession, *, agent_id: str, auth_subject: str) -> Agent:
+    user = (await session.exec(select(User).where(User.auth_subject == auth_subject))).first()
+    agent = None
+    if user:
+        agent = (
+            await session.exec(
+                select(Agent).where(Agent.agent_id == agent_id).where(Agent.owner_user_id == user.id)
+            )
+        ).first()
+    if not agent:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Authenticated user does not own this agent",
+        )
+    return agent
+
+
+async def ensure_operator_owns_agent(
+    session: AsyncSession, *, operator: UserAuthContext, agent_id: str
+) -> Agent:
+    """Authorize a Cognito operator to act on a specific agent."""
+    return await _assert_agent_owned_by_subject(session, agent_id=agent_id, auth_subject=operator.sub)
+
+
+async def ensure_agent_access(session: AsyncSession, auth_context: AuthContext, agent_id: str) -> None:
+    """Authorize the caller to act on behalf of agent_id.
+
+    HMAC callers may only act as the agent that signed the request. Cognito
+    operators may only act as agents they own.
+    """
+    if auth_context.method == "hmac":
+        if auth_context.agent_id != agent_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Authenticated agent_id does not match request payload agent_id",
+            )
+        return
+    await _assert_agent_owned_by_subject(session, agent_id=agent_id, auth_subject=auth_context.principal_id)
 
 
 async def verify_agent_auth(
@@ -97,16 +210,23 @@ async def verify_agent_auth(
     x_agent_id: str | None = Header(default=None),
     x_timestamp: str | None = Header(default=None),
     x_signature: str | None = Header(default=None),
-    x_agent_key: str | None = Header(default=None),
 ) -> AuthContext:
     settings = get_settings()
 
-    # Preferred production method #1: JWT bearer auth.
+    # Cognito Bearer — accepted from dashboard operators and dev test buttons.
+    # x-agent-id is an unauthenticated claim and is never an authorization
+    # identity on its own; it is only honoured after the authenticated user is
+    # confirmed to own that agent, and Cognito principals are otherwise authorized
+    # by principal_id against the agent's owner_user_id.
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        return _verify_jwt_bearer(token)
+        user_ctx = await run_in_threadpool(_verify_cognito_bearer, token)
+        if x_agent_id:
+            async with AsyncSession(async_engine) as session:
+                await _assert_agent_owned_by_subject(session, agent_id=x_agent_id, auth_subject=user_ctx.sub)
+        return AuthContext(principal_id=user_ctx.sub, method="cognito", agent_id=x_agent_id)
 
-    # Preferred production method #2: HMAC signed request.
+    # HMAC-SHA256 — signed by real agent SDK.
     if x_agent_id and x_timestamp and x_signature:
         _validate_timestamp(x_timestamp, settings.signature_tolerance_seconds)
         body_hash = _body_sha256(await request.body())
@@ -119,19 +239,7 @@ async def verify_agent_auth(
                 x_agent_id,
             ]
         )
-        with Session(engine) as session:
-            agent = session.exec(select(Agent).where(Agent.agent_id == x_agent_id)).first()
-            if not agent:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Unknown agent_id for HMAC authentication",
-                )
-            if not agent.hmac_secret:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Agent has no HMAC secret — rotate credentials first",
-                )
-            expected_secret = agent.hmac_secret
+        expected_secret = await _load_agent_hmac_secret(x_agent_id)
 
         if not _verify_hmac(expected_secret, canonical_message, x_signature):
             raise HTTPException(
@@ -140,92 +248,21 @@ async def verify_agent_auth(
             )
         return AuthContext(principal_id=x_agent_id, method="hmac", agent_id=x_agent_id)
 
-    # Dev-only compatibility for earlier prototype clients.
-    # This fallback still enforces agent scoping by requiring both agent_id and a
-    # matching per-agent key from the database.
-    if settings.app_env == "dev" and x_agent_key:
-        if not x_agent_id:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="x-agent-id header is required with x-agent-key in dev mode",
-            )
-        with Session(engine) as session:
-            agent = session.exec(select(Agent).where(Agent.agent_id == x_agent_id)).first()
-            if not agent:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Unknown agent_id for dev authentication",
-                )
-            if not agent.hmac_secret:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Agent has no HMAC secret — rotate credentials first",
-                )
-            if not hmac.compare_digest(agent.hmac_secret, x_agent_key):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid dev agent key",
-                )
-
-        return AuthContext(
-            principal_id=x_agent_id,
-            method="legacy",
-            agent_id=x_agent_id,
-        )
-
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing authentication. Provide Bearer JWT or HMAC signature headers.",
+        detail="Missing authentication. Provide a Cognito Bearer token or HMAC signature headers (x-agent-id, x-timestamp, x-signature).",
     )
 
 
 async def verify_user_auth(
-    request: Request,
     authorization: str | None = Header(default=None),
-    x_agent_id: str | None = Header(default=None),
-    x_agent_key: str | None = Header(default=None),
 ) -> UserAuthContext:
-    settings = get_settings()
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization.split(" ", 1)[1].strip()
-        if settings.app_env == "dev" and token == settings.dev_user_token:
-            return UserAuthContext(
-                sub=settings.dev_user_sub,
-                email=settings.dev_user_email,
-                display_name="Local Dev User",
-                method="dev-user-token",
-                claims={"sub": settings.dev_user_sub, "email": settings.dev_user_email},
-            )
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unsupported user token for current environment",
-        )
-
-    if settings.app_env == "dev" and x_agent_id and x_agent_key:
-        with Session(engine) as session:
-            agent = session.exec(select(Agent).where(Agent.agent_id == x_agent_id)).first()
-            if not agent or not agent.hmac_secret:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Unknown agent credentials for dashboard authentication",
-                )
-            if not hmac.compare_digest(agent.hmac_secret, x_agent_key):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid agent key for dashboard authentication",
-                )
-        return UserAuthContext(
-            sub=f"agent:{x_agent_id}",
-            email=None,
-            display_name=None,
-            method="legacy-agent",
-            agent_id=x_agent_id,
-            claims={"agent_id": x_agent_id},
-        )
-
+        return await run_in_threadpool(_verify_cognito_bearer, token)
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing user authentication. Provide Bearer token or dev agent headers.",
+        detail="Missing user authentication. Provide Cognito Bearer token.",
     )
 
 
@@ -235,10 +272,6 @@ async def verify_hitl_webhook_signature(
     x_webhook_timestamp: str | None = Header(default=None),
 ) -> None:
     settings = get_settings()
-
-    # Dev shortcut kept for existing integration tests/manual smoke tests.
-    if settings.app_env == "dev" and x_webhook_signature == "sig_ok":
-        return
 
     if not x_webhook_signature or not x_webhook_timestamp:
         raise HTTPException(
@@ -262,3 +295,43 @@ async def verify_hitl_webhook_signature(
             detail="Invalid webhook signature",
         )
 
+
+async def verify_hitl_auth(
+    request: Request,
+    authorization: str | None = Header(default=None),
+    x_webhook_signature: str | None = Header(default=None),
+    x_webhook_timestamp: str | None = Header(default=None),
+) -> UserAuthContext | None:
+    """Accept either Cognito Bearer (dashboard operators) or webhook HMAC (external integrations).
+
+    Returns the operator context for Cognito callers so the route can authorize
+    them against the agent that owns the pending request; webhook callers are
+    already scoped by the shared secret and return ``None``.
+    """
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        return await run_in_threadpool(_verify_cognito_bearer, token)
+
+    if x_webhook_signature and x_webhook_timestamp:
+        settings = get_settings()
+        _validate_timestamp(x_webhook_timestamp, settings.signature_tolerance_seconds)
+        body_hash = _body_sha256(await request.body())
+        canonical_message = "\n".join(
+            [
+                request.method.upper(),
+                request.url.path,
+                x_webhook_timestamp,
+                body_hash,
+            ]
+        )
+        if not _verify_hmac(settings.webhook_hmac_secret, canonical_message, x_webhook_signature):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid webhook signature",
+            )
+        return None
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Provide a Cognito Bearer token or webhook HMAC signature headers (x-webhook-signature + x-webhook-timestamp)",
+    )

@@ -1,30 +1,74 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/v1";
-const AUTH_STORAGE_KEY = "agentshield_id_token";
+import { clearAuthSession, getIdToken, isTokenExpired, refreshSession } from "./auth";
 
 export function authHeaders(agentId, extra = {}) {
   return {
     "Content-Type": "application/json",
-    "x-agent-key": "local-dev-key",
     ...(agentId ? { "x-agent-id": agentId } : {}),
     ...extra,
   };
+}
+
+const SESSION_EXPIRED_MESSAGE = "Session expired. Please sign in again.";
+let redirectingToLogin = false;
+
+// Several widgets load in parallel, so an expired session produces a burst of
+// 401s. Only the first one navigates; the rest just reject.
+function redirectToLogin() {
+  clearAuthSession();
+  if (!redirectingToLogin) {
+    redirectingToLogin = true;
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    const suffix = returnTo && returnTo !== "/auth" ? `?returnTo=${encodeURIComponent(returnTo)}` : "";
+    window.location.assign(`/auth${suffix}`);
+  }
+  return new Error(SESSION_EXPIRED_MESSAGE);
+}
+
+let pendingRefresh = null;
+
+function refreshOnce() {
+  if (!pendingRefresh) {
+    pendingRefresh = refreshSession().finally(() => {
+      pendingRefresh = null;
+    });
+  }
+  return pendingRefresh;
 }
 
 async function request(path, options = {}) {
   const { authMode = "user", headers = {}, ...rest } = options;
   const finalHeaders = { ...headers };
   if (authMode === "user") {
-    const token = localStorage.getItem(AUTH_STORAGE_KEY);
-    if (token && !finalHeaders.Authorization) {
+    let token = getIdToken();
+    if (isTokenExpired(token)) {
+      if (!(await refreshOnce())) throw redirectToLogin();
+      token = getIdToken();
+    }
+    if (!finalHeaders.Authorization) {
       finalHeaders.Authorization = `Bearer ${token}`;
     }
   }
-  const response = await fetch(`${API_BASE}${path}`, { ...rest, headers: finalHeaders });
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, { ...rest, headers: finalHeaders });
+  } catch {
+    throw new Error("Cannot reach the AgentShield API. Check that the backend is running.");
+  }
+  if (response.status === 401 && authMode === "user") {
+    throw redirectToLogin();
+  }
+  if (response.status === 503) {
+    // Identity provider or a dependency is down — not a dead session, so the
+    // user keeps their token instead of being bounced to the login page.
+    throw new Error("AgentShield is temporarily unavailable. Try again in a moment.");
+  }
   if (!response.ok) {
     let message = `Request failed: ${response.status}`;
     try {
       const data = await response.json();
-      message = data.detail || message;
+      const detail = data.detail;
+      message = typeof detail === "string" ? detail : Array.isArray(detail) ? detail.map((e) => e.msg || JSON.stringify(e)).join("; ") : message;
     } catch {
       // noop
     }
@@ -54,7 +98,7 @@ export async function getDashboardStats(agentId) {
 }
 
 export async function getActivity(agentId) {
-  return request(`/dashboard/agents/${agentId}/activity?limit=100`, {
+  return request(`/dashboard/agents/${agentId}/activity`, {
     authMode: "user",
   });
 }
@@ -68,11 +112,8 @@ export async function getNotifications(agentId) {
 export async function resolveRequest(requestId, decision, resolverId = "dashboard:operator") {
   return request(`/hitl/resolve/${requestId}`, {
     method: "POST",
-    headers: {
-      ...authHeaders(undefined),
-      "x-webhook-signature": "sig_ok",
-    },
-    authMode: "none",
+    headers: { "Content-Type": "application/json" },
+    authMode: "user",
     body: JSON.stringify({
       decision,
       resolver_id: resolverId,
@@ -90,19 +131,29 @@ export async function submitSpendRequest(agentId, payload) {
   });
 }
 
+// Used by dashboard mock test buttons — authenticates with the operator's
+// Bearer token so no HMAC signing is required.
+export async function runDevTestRequest(agentId, payload) {
+  return request("/spend-request", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-agent-id": agentId },
+    body: JSON.stringify(payload),
+    authMode: "user",
+  });
+}
+
 export async function bootstrapOnboarding(payload) {
   return request("/onboarding/bootstrap", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
-    authMode: "none",
+    authMode: "user",
   });
 }
 
 export async function getOnboardingChecklist(agentId) {
   return request(`/onboarding/agents/${agentId}/checklist`, {
-    headers: authHeaders(agentId),
-    authMode: "none",
+    authMode: "user",
   });
 }
 
@@ -136,5 +187,23 @@ export async function updateHitlPreferences(agentId, prefs) {
 export async function getAgent(agentId) {
   const data = await listAgents();
   return data.agents.find((a) => a.agent_id === agentId) || null;
+}
+
+export async function updateAgentScopes(agentId, allowedScopes) {
+  return request(`/agents/${agentId}/scopes`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ allowed_scopes: allowedScopes }),
+    authMode: "user",
+  });
+}
+
+export async function updateAgentSettings(agentId, payload) {
+  return request(`/agents/${agentId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    authMode: "user",
+  });
 }
 
