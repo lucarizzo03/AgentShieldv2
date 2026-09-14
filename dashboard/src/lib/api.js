@@ -1,5 +1,5 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/v1";
-import { clearAuthSession, getIdToken, isTokenExpired } from "./auth";
+import { clearAuthSession, getIdToken, isTokenExpired, refreshSession } from "./auth";
 
 export function authHeaders(agentId, extra = {}) {
   return {
@@ -25,13 +25,25 @@ function redirectToLogin() {
   return new Error(SESSION_EXPIRED_MESSAGE);
 }
 
+let pendingRefresh = null;
+
+function refreshOnce() {
+  if (!pendingRefresh) {
+    pendingRefresh = refreshSession().finally(() => {
+      pendingRefresh = null;
+    });
+  }
+  return pendingRefresh;
+}
+
 async function request(path, options = {}) {
   const { authMode = "user", headers = {}, ...rest } = options;
   const finalHeaders = { ...headers };
   if (authMode === "user") {
-    const token = getIdToken();
+    let token = getIdToken();
     if (isTokenExpired(token)) {
-      throw redirectToLogin();
+      if (!(await refreshOnce())) throw redirectToLogin();
+      token = getIdToken();
     }
     if (!finalHeaders.Authorization) {
       finalHeaders.Authorization = `Bearer ${token}`;
