@@ -32,15 +32,15 @@ export default function AuthCallbackView() {
           Back to sign in
         </Link>
         <div className="auth-note">
-          If this keeps happening, confirm this callback URL is listed in the Auth0 application's allowed callback
-          URLs and that the API audience matches the dashboard configuration.
+          If this keeps happening, confirm this callback URL is listed in the Cognito app client's allowed callback
+          URLs and that the client ID matches the dashboard configuration.
         </div>
       </AuthShell>
     );
   }
 
   return (
-    <AuthShell label="SIGN IN" title="Completing sign-in" subtitle="Exchanging your authorization code with Auth0.">
+    <AuthShell label="SIGN IN" title="Completing sign-in" subtitle="Exchanging your authorization code with Cognito.">
       <div style={{ display: "flex", alignItems: "center", gap: 10, color: "#a1a1a1", fontSize: 13 }}>
         <span className="auth-spinner" />
         This should only take a second.
