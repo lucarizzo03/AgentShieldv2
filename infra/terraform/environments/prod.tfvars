@@ -6,7 +6,8 @@ rds_instance_class    = "db.t4g.micro"
 rds_allocated_storage = 20
 rds_multi_az          = false
 
-redis_node_type = "cache.t4g.micro"
+redis_node_type          = "cache.t4g.micro"
+redis_num_cache_clusters = 2
 
 ecs_task_cpu      = 512
 ecs_task_memory   = 1024
@@ -14,6 +15,13 @@ ecs_desired_count = 2
 
 # Required — fill in with the actual dashboard origin (e.g. "https://app.agentshield.example.com").
 dashboard_origin = "https://CHANGEME.example.com"
+
+# image_tag is deliberately not set here: it changes every build. Pass it on
+# the command line, e.g.
+#   terraform apply -var-file=environments/prod.tfvars -var image_tag=$(git rev-parse --short HEAD)
+
+hitl_email_from = ""
+hitl_email_to   = ""
 
 acm_certificate_arn = ""
 enable_https        = false
