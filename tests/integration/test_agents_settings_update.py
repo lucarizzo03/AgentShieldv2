@@ -13,10 +13,10 @@ def _reset_db() -> None:
 
 def _mock_user_auth() -> UserAuthContext:
     return UserAuthContext(
-        sub="auth0|settings_user",
+        sub="cognito-sub-settings_user",
         email="settings@example.com",
         display_name="Settings User",
-        method="auth0",
+        method="cognito",
     )
 
 

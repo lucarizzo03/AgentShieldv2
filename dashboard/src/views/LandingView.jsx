@@ -1,6 +1,8 @@
 import { Link } from "react-router-dom";
 import { useState } from "react";
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/v1";
+
 // ─── Syntax token colors ────────────────────────────────────────────────────
 const T = {
   kw:    "#4FC1FF", // keywords
@@ -40,7 +42,7 @@ const PYTHON = [
   [["client", "def"], [" = ", "op"], ["AgentShield", "cls"], ["(", "op"]],
   [["    agent_id", "key"], ["=", "op"], ['"agt_..."', "str"], [",", "op"]],
   [["    hmac_secret", "key"], ["=", "op"], ['"sk_live_..."', "str"], [",", "op"]],
-  [["    base_url", "key"], ["=", "op"], ['"https://agentshieldv2-backend-production.up.railway.app"', "str"], [",", "op"]],
+  [["    base_url", "key"], ["=", "op"], [`"${API_BASE}"`, "str"], [",", "op"]],
   [[")", "op"]],
   null,
   [["result", "def"], [" = ", "op"], ["client", "def"], [".", "op"], ["spend_request", "fn"], ["(", "op"], ["SpendRequest", "cls"], ["(", "op"]],
