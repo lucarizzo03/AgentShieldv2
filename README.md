@@ -738,4 +738,4 @@ uv run pytest
 - Vendor blocklist uses hostname/domain matching for URL vendors and word-boundary matching for plain text — not simple substring; be exact with entries
 - Rotating an agent's HMAC secret takes effect immediately — any in-flight requests signed with the old secret will fail
 - Every response includes `x-request-id` and `x-latency-ms` headers for tracing
-- Every pull request is automatically reviewed by a Devin automation; findings are posted as a PR comment
+- Every pull request is automatically reviewed by a Devin automation; findings are posted as a PR comment on every push
