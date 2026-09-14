@@ -13,8 +13,9 @@ ecs_task_cpu      = 512
 ecs_task_memory   = 1024
 ecs_desired_count = 2
 
-# Required — fill in with the actual dashboard origin (e.g. "https://app.agentshield.example.com").
-dashboard_origin = "https://CHANGEME.example.com"
+# Vercel-hosted dashboard. Also feeds the Cognito callback/logout URLs, so it must
+# match the origin the browser actually loads (no trailing slash).
+dashboard_origin = "https://agent-shieldv2.vercel.app"
 
 # image_tag is deliberately not set here: it changes every build. Pass it on
 # the command line, e.g.
