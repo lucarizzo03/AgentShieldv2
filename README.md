@@ -316,10 +316,28 @@ aws ecs run-task \
 
 Then `aws ecs update-service --force-new-deployment` to roll the API.
 
-Not covered by this stack: dashboard hosting (the Vite build needs its own S3 + CloudFront
-or equivalent; `dashboard_origin` only feeds CORS and the Cognito callback URLs), TLS
-(`enable_https = false` until you supply an ACM cert), CloudWatch alarms on the engine
-degradation counters, and CI/CD.
+Not covered by this stack: TLS (`enable_https = false` until you supply an ACM cert),
+CloudWatch alarms on the engine degradation counters, and CI/CD.
+
+### Dashboard (Vercel)
+
+The dashboard is a static Vite build and is hosted separately from the Terraform stack;
+`dashboard_origin` only tells the backend which origin to allow through CORS and which
+callback URLs to register in Cognito.
+
+Import the repo into Vercel with **Root Directory = `dashboard`** — `dashboard/vercel.json`
+supplies the rest, including the SPA rewrite that keeps `/auth/callback` from 404ing on the
+Cognito redirect. Set the variables in `dashboard/.env.example` in the Vercel project;
+`VITE_API_BASE_URL` is the ALB URL plus `/v1`, and the Cognito values come from
+`terraform output`.
+
+The two sides reference each other, so the order is: deploy once to learn the Vercel URL,
+put it in `dashboard_origin`, re-apply Terraform, then set the Vercel env vars from the
+outputs and redeploy.
+
+Vercel serves over HTTPS, so the browser will block calls to an `http://` ALB as mixed
+content — the dashboard needs `enable_https = true` and an ACM certificate to reach the
+API from a deployed origin.
 
 ---
 
