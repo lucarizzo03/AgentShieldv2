@@ -263,9 +263,9 @@ AGENT_HMAC_SECRET=...
 WEBHOOK_HMAC_SECRET=...
 SIGNATURE_TOLERANCE_SECONDS=300
 HITL_DEFAULT_TIMEOUT_SECONDS=600
-AUTH0_DOMAIN=...                           # required for dashboard login
-AUTH0_AUDIENCE=...
-AUTH0_ISSUER=...
+COGNITO_REGION=...                         # required for dashboard login
+COGNITO_USER_POOL_ID=...
+COGNITO_APP_CLIENT_ID=...
 ```
 
 `APP_ENV=dev` relaxes some runtime guards. **Never deploy with `APP_ENV=dev`.**
@@ -446,13 +446,13 @@ canonical = "\n".join(["POST", "/v1/spend-request", timestamp, body_hash, AGENT_
 signature = hmac.new(AGENT_HMAC_SECRET.encode(), canonical.encode(), hashlib.sha256).hexdigest()
 ```
 
-### Dashboard operators — Auth0 Bearer
+### Dashboard operators — Cognito Bearer
 
-Dashboard routes (and the HITL resolve endpoint) accept `Authorization: Bearer <token>` using Auth0 JWT. The token audience must match `AUTH0_AUDIENCE`. Auth0 proves identity but does not cover payload integrity.
+Dashboard routes (and the HITL resolve endpoint) accept `Authorization: Bearer <token>` using a Cognito access token (RS256, validated against the user pool's JWKS). The token must have `token_use=access` and a `client_id` claim matching `COGNITO_APP_CLIENT_ID` — Cognito access tokens carry no `aud` claim, so `client_id` is the audience check. Cognito proves identity but does not cover payload integrity.
 
 ### HITL webhook — HMAC-SHA256
 
-Same mechanics as agent HMAC, but no `agent_id` line (4 lines instead of 5), and uses `WEBHOOK_HMAC_SECRET`. Headers: `x-webhook-timestamp` and `x-webhook-signature`. The HITL resolve endpoint accepts either this or an Auth0 Bearer token.
+Same mechanics as agent HMAC, but no `agent_id` line (4 lines instead of 5), and uses `WEBHOOK_HMAC_SECRET`. Headers: `x-webhook-timestamp` and `x-webhook-signature`. The HITL resolve endpoint accepts either this or a Cognito Bearer token.
 
 ---
 
