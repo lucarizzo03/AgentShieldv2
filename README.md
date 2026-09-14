@@ -1,6 +1,6 @@
 # AgentShield
 
-**[→ Live Dashboard](https://agentshieldv2-dashboard-production.up.railway.app?utm_source=github&utm_medium=readme&utm_campaign=agentshield)** — sign in, create an agent, and start making requests in minutes.
+**[→ Live Dashboard](https://agent-shieldv2.vercel.app?utm_source=github&utm_medium=readme&utm_campaign=agentshield)** — sign in, create an agent, and start making requests in minutes.
 
 Questions or issues → **rizzoluca2003@gmail.com**
 
@@ -50,7 +50,7 @@ elif result.pending_hitl:
     pass
 ```
 
-Get your `agent_id` and `hmac_secret` from the [dashboard](https://agentshieldv2-dashboard-production.up.railway.app) after creating an agent.
+Get your `agent_id` and `hmac_secret` from the [dashboard](https://agent-shieldv2.vercel.app) after creating an agent.
 
 ## How It Works
 
