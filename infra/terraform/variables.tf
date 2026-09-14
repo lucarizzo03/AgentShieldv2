@@ -39,6 +39,32 @@ variable "redis_node_type" {
   default     = "cache.t4g.micro"
 }
 
+variable "image_tag" {
+  description = "ECR image tag to deploy — pass the git SHA you built (`-var image_tag=$(git rev-parse --short HEAD)`). The repository is IMMUTABLE, so `latest` can only ever be pushed once."
+  type        = string
+}
+
+variable "redis_num_cache_clusters" {
+  description = "Redis nodes. Keep at 2+ in prod: Redis holds budget counters and reservations, and a single-node replacement resets every agent's daily spend."
+  type        = number
+  default     = 2
+}
+
+variable "shadow_eval_sample_rate" {
+  type    = number
+  default = 0.1
+}
+
+variable "hitl_email_from" {
+  type    = string
+  default = ""
+}
+
+variable "hitl_email_to" {
+  type    = string
+  default = ""
+}
+
 variable "ecs_task_cpu" {
   description = "Fargate task CPU units."
   type        = number

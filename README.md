@@ -272,6 +272,57 @@ COGNITO_APP_CLIENT_ID=...
 
 ---
 
+## AWS Deployment
+
+`infra/terraform/` provisions a VPC, RDS Postgres, ElastiCache Redis, a Cognito user pool,
+an ECR repository and an ECS Fargate service behind an ALB. State lives in S3 — bootstrap
+that bucket and the DynamoDB lock table once, by hand, before the first `init`
+(see `infra/terraform/backend.tf`).
+
+The ECR repository is immutable, so every deploy needs its own tag:
+
+```bash
+TAG=$(git rev-parse --short HEAD)
+cd infra/terraform
+terraform init
+terraform apply -var-file=environments/prod.tfvars -var image_tag="$TAG"
+```
+
+On the very first apply the image doesn't exist yet, so the service won't stabilize until
+you build and push one:
+
+```bash
+REPO=$(terraform output -raw ecr_repository_url)
+aws ecr get-login-password | docker login --username AWS --password-stdin "${REPO%%/*}"
+docker build -t "$REPO:$TAG" ../.. && docker push "$REPO:$TAG"
+```
+
+Then fill in the placeholder secrets (`.../anthropic-api-key`, `.../webhook-hmac-secret`,
+`.../agent-hmac-secret`, `.../sendgrid-api-key`, `.../metrics-auth-token`) with
+`aws secretsmanager put-secret-value`. `POSTGRES_DSN` and `REDIS_DSN` are composed by
+Terraform and need no manual step.
+
+**Migrations run as a one-off task, not at startup.** The app only creates tables
+automatically on SQLite; Alembic owns the Postgres schema. Run this after pushing an image
+and before rolling the service:
+
+```bash
+aws ecs run-task \
+  --cluster "$(terraform output -raw ecs_cluster_name)" \
+  --task-definition "$(terraform output -raw migrate_task_definition)" \
+  --launch-type FARGATE \
+  --network-configuration "$(terraform output -raw migrate_network_configuration)"
+```
+
+Then `aws ecs update-service --force-new-deployment` to roll the API.
+
+Not covered by this stack: dashboard hosting (the Vite build needs its own S3 + CloudFront
+or equivalent; `dashboard_origin` only feeds CORS and the Cognito callback URLs), TLS
+(`enable_https = false` until you supply an ACM cert), CloudWatch alarms on the engine
+degradation counters, and CI/CD.
+
+---
+
 ## API Reference
 
 ### Endpoint Index

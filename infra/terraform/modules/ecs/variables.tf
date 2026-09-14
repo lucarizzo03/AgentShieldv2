@@ -30,6 +30,11 @@ variable "sg_ecs_tasks_id" {
   type = string
 }
 
+variable "image_tag" {
+  description = "ECR image tag to deploy. The repository is IMMUTABLE, so this must be a unique per-build tag (the git SHA), not `latest`."
+  type        = string
+}
+
 variable "task_cpu" {
   type = number
 }

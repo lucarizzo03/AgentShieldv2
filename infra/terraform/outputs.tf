@@ -6,8 +6,9 @@ output "rds_endpoint" {
   value = module.rds.endpoint
 }
 
-output "rds_secret_arn" {
-  value = module.rds.secret_arn
+output "postgres_dsn_secret_arn" {
+  description = "Secrets Manager secret holding the full app DSN, composed at apply time."
+  value       = aws_secretsmanager_secret.postgres_dsn.arn
 }
 
 output "elasticache_endpoint" {
@@ -16,6 +17,22 @@ output "elasticache_endpoint" {
 
 output "ecr_repository_url" {
   value = module.ecs.ecr_repository_url
+}
+
+output "ecs_cluster_name" {
+  value = module.ecs.cluster_name
+}
+
+output "ecs_service_name" {
+  value = module.ecs.service_name
+}
+
+output "migrate_task_definition" {
+  value = module.ecs.migrate_task_definition
+}
+
+output "migrate_network_configuration" {
+  value = module.ecs.task_network_configuration
 }
 
 output "cognito_user_pool_id" {

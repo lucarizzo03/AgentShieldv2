@@ -16,3 +16,10 @@ CLAUDE.md
 .claude/
 .vite/
 
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars.local
+crash.log

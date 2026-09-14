@@ -24,7 +24,11 @@ resource "aws_db_instance" "this" {
   db_name  = "agentshield"
   username = "agentshield"
 
-  manage_master_user_password = true
+  # Not `manage_master_user_password`: AWS would generate the password into a
+  # secret of its own and rotate it, while the app reads a separate DSN secret
+  # that would then go stale. The password is passed in so the DSN can be
+  # composed from it at apply time with no manual step.
+  password = var.password
 
   db_subnet_group_name   = aws_db_subnet_group.this.name
   vpc_security_group_ids = [var.sg_rds_id]
