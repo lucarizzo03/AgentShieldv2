@@ -28,6 +28,5 @@ python3.11 scripts/migrate.py downgrade -1
 
 ## Notes
 
-- `app/migrations/versions/0001_initial_schema.sql` is a legacy SQL snapshot.
 - Alembic uses Python revision files as the source of migration history.
 

@@ -195,7 +195,7 @@ These defenses raise the bar significantly but do not eliminate the risk. A suff
 
 **Dashboard:** React + Vite + Tailwind, port 5173
 
-**Auth:** Per-agent HMAC-SHA256 signed requests; Auth0 JWT for dashboard operators
+**Auth:** Per-agent HMAC-SHA256 signed requests; Cognito JWT for dashboard operators
 
 ---
 
@@ -455,7 +455,7 @@ Approve or deny a pending spend request.
 }
 ```
 
-Accepts either an Auth0 Bearer token (dashboard operators) or webhook HMAC headers (`x-webhook-signature` + `x-webhook-timestamp`).
+Accepts either a Cognito Bearer token (dashboard operators) or webhook HMAC headers (`x-webhook-signature` + `x-webhook-timestamp`).
 
 ---
 
