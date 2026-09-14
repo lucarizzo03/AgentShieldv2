@@ -111,11 +111,12 @@ resource "aws_ecs_task_definition" "this" {
   # On first apply this image tag does not exist yet — the ECR repo is
   # created empty. Build and push the image (see repo Dockerfile), then
   # force a new deployment; the service will not stabilize until a matching
-  # tag is pushed.
+  # tag is pushed. The repo is IMMUTABLE, so var.image_tag must be a fresh
+  # tag per build (a git SHA), never a moving `latest`.
   container_definitions = jsonencode([
     {
       name      = "api"
-      image     = "${aws_ecr_repository.this.repository_url}:latest"
+      image     = "${aws_ecr_repository.this.repository_url}:${var.image_tag}"
       essential = true
 
       portMappings = [
@@ -155,6 +156,55 @@ resource "aws_ecs_task_definition" "this" {
   }
 }
 
+# Same image, run as a one-off `aws ecs run-task` before each deploy. Alembic
+# owns the Postgres schema — the app no longer creates tables at startup — so
+# this task is the only thing that migrates the database.
+resource "aws_ecs_task_definition" "migrate" {
+  family                   = "${local.name_prefix}-migrate"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = 512
+  memory                   = 1024
+  execution_role_arn       = aws_iam_role.task_execution.arn
+  task_role_arn            = aws_iam_role.task.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = "migrate"
+      image     = "${aws_ecr_repository.this.repository_url}:${var.image_tag}"
+      essential = true
+      command   = ["alembic", "upgrade", "head"]
+
+      environment = [
+        for name, value in var.container_environment : {
+          name  = name
+          value = value
+        }
+      ]
+
+      secrets = [
+        for name, arn in var.app_secret_arns : {
+          name      = name
+          valueFrom = arn
+        }
+      ]
+
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          "awslogs-group"         = aws_cloudwatch_log_group.this.name
+          "awslogs-region"        = var.aws_region
+          "awslogs-stream-prefix" = "migrate"
+        }
+      }
+    }
+  ])
+
+  tags = {
+    Name = "${local.name_prefix}-migrate"
+  }
+}
+
 # --- ALB ---
 
 resource "aws_lb" "this" {
@@ -176,8 +226,12 @@ resource "aws_lb_target_group" "this" {
   vpc_id      = var.vpc_id
   target_type = "ip"
 
+  # The health router is mounted without a prefix (app/main.py), so liveness
+  # is /health, not /v1/health. /ready additionally pings Postgres and Redis;
+  # it is deliberately not the target-group check, because a Redis blip would
+  # then take every task out of service instead of degrading requests.
   health_check {
-    path                = "/v1/health"
+    path                = "/health"
     interval            = 30
     healthy_threshold   = 2
     unhealthy_threshold = 3
@@ -221,6 +275,14 @@ resource "aws_ecs_service" "this" {
   task_definition = aws_ecs_task_definition.this.arn
   desired_count   = var.desired_count
   launch_type     = "FARGATE"
+
+  health_check_grace_period_seconds = 60
+  enable_execute_command            = true
+
+  deployment_circuit_breaker {
+    enable   = true
+    rollback = true
+  }
 
   network_configuration {
     subnets          = var.private_subnet_ids
