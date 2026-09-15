@@ -9,8 +9,6 @@ from redis.asyncio import Redis
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-logger = logging.getLogger(__name__)
-
 from app.api.v1.schemas.hitl import HitlResolveRequest
 from app.api.v1.schemas.spend import SpendRequest
 from app.core.config import get_settings
@@ -32,6 +30,8 @@ from app.policy.provenance import engine_provenance
 from app.services.activity_log import append_agent_activity
 from app.services.hitl.callback import build_callback_body, deliver_verdict_callback
 from app.services.hitl.state_manager import apply_resolution, ensure_pending_is_resolvable
+
+logger = logging.getLogger(__name__)
 
 
 def _email_confirm_page(decision: str) -> str:
