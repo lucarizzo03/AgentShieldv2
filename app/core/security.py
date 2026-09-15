@@ -65,7 +65,7 @@ def _validate_timestamp(timestamp: str, tolerance_seconds: int) -> None:
 
 def _verify_hmac(secret: str, message: str, signature: str) -> bool:
     expected = hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
-    return expected == _normalize_signature(signature)
+    return hmac.compare_digest(expected, _normalize_signature(signature))
 
 
 def _cognito_issuer() -> str:
