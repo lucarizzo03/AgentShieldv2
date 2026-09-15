@@ -1,6 +1,6 @@
 """A dashboard operator may only resolve requests belonging to their own agents.
 
-`/v1/hitl/resolve/{request_id}` accepts any authenticated Auth0 bearer token, so
+`/v1/hitl/resolve/{request_id}` accepts any authenticated Cognito bearer token, so
 without an ownership check any signed-up user could approve someone else's
 pending spend and release their money.
 """
@@ -43,14 +43,14 @@ SPEND_BODY = {
 def _seed_owner_and_attacker() -> None:
     owner_id = uuid4()
     with Session(engine) as session:
-        session.add(User(id=owner_id, auth_subject="auth0|owner", email="owner@example.com"))
-        session.add(User(auth_subject="auth0|attacker", email="attacker@example.com"))
+        session.add(User(id=owner_id, auth_subject="cognito|owner", email="owner@example.com"))
+        session.add(User(auth_subject="cognito|attacker", email="attacker@example.com"))
         session.commit()
     _seed_agent(owner_user_id=owner_id, hmac_secret=AGENT_SECRET)
 
 
 def _mock_bearer(sub: str) -> None:
-    security._verify_auth0_bearer = lambda token: UserAuthContext(
+    security._verify_cognito_bearer = lambda token: UserAuthContext(
         sub=sub, email=None, display_name=None
     )
 
@@ -81,50 +81,50 @@ def _setup() -> None:
 
 
 def test_operator_cannot_resolve_another_users_pending_request() -> None:
-    original = security._verify_auth0_bearer
+    original = security._verify_cognito_bearer
     _setup()
     try:
         with TestClient(app) as client:
             request_id = _park_request(client)
-            _mock_bearer("auth0|attacker")
+            _mock_bearer("cognito|attacker")
             resp = _resolve_as_bearer(client, request_id)
         assert resp.status_code == 403, resp.text
     finally:
-        security._verify_auth0_bearer = original
+        security._verify_cognito_bearer = original
         app.dependency_overrides.clear()
 
 
 def test_owner_can_resolve_their_own_pending_request() -> None:
-    original = security._verify_auth0_bearer
+    original = security._verify_cognito_bearer
     _setup()
     try:
         with TestClient(app) as client:
             request_id = _park_request(client)
-            _mock_bearer("auth0|owner")
+            _mock_bearer("cognito|owner")
             resp = _resolve_as_bearer(client, request_id)
         assert resp.status_code == 200, resp.text
         assert resp.json()["decision"] == "APPROVE"
     finally:
-        security._verify_auth0_bearer = original
+        security._verify_cognito_bearer = original
         app.dependency_overrides.clear()
 
 
 def test_checklist_requires_ownership() -> None:
-    original = security._verify_auth0_bearer
+    original = security._verify_cognito_bearer
     _setup()
     try:
         with TestClient(app) as client:
             unauthenticated = client.get("/v1/onboarding/agents/agent_demo/checklist")
             assert unauthenticated.status_code == 401, unauthenticated.text
 
-            _mock_bearer("auth0|attacker")
+            _mock_bearer("cognito|attacker")
             forbidden = client.get(
                 "/v1/onboarding/agents/agent_demo/checklist",
                 headers={"Authorization": "Bearer mock-token"},
             )
             assert forbidden.status_code == 403, forbidden.text
 
-            _mock_bearer("auth0|owner")
+            _mock_bearer("cognito|owner")
             allowed = client.get(
                 "/v1/onboarding/agents/agent_demo/checklist",
                 headers={"Authorization": "Bearer mock-token"},
@@ -132,15 +132,15 @@ def test_checklist_requires_ownership() -> None:
             assert allowed.status_code == 200, allowed.text
             assert allowed.json()["agent_id"] == "agent_demo"
     finally:
-        security._verify_auth0_bearer = original
+        security._verify_cognito_bearer = original
         app.dependency_overrides.clear()
 
 
 def test_unknown_agent_checklist_does_not_leak_existence() -> None:
-    original = security._verify_auth0_bearer
+    original = security._verify_cognito_bearer
     _setup()
     try:
-        _mock_bearer("auth0|owner")
+        _mock_bearer("cognito|owner")
         with TestClient(app) as client:
             resp = client.get(
                 f"/v1/onboarding/agents/agent_{uuid4().hex[:12]}/checklist",
@@ -148,5 +148,5 @@ def test_unknown_agent_checklist_does_not_leak_existence() -> None:
             )
         assert resp.status_code == 403, resp.text
     finally:
-        security._verify_auth0_bearer = original
+        security._verify_cognito_bearer = original
         app.dependency_overrides.clear()
