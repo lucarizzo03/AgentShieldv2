@@ -11,10 +11,10 @@ def mask_secret(value: str | None, visible: int = 4) -> str:
     secrets never leak most of their content. ``None`` and empty strings
     return an empty string.
     """
-    if not value:
-        return ""
     if visible < 0:
         raise ValueError("visible must be non-negative")
+    if not value:
+        return ""
     if len(value) < MIN_MASKED_LENGTH or visible == 0:
         return MASK_CHAR * len(value)
     visible = min(visible, len(value) // 2)

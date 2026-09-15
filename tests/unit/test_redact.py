@@ -57,6 +57,12 @@ def test_negative_visible_raises_value_error(visible: int) -> None:
         mask_secret("sk_live_abcdef123456", visible=visible)
 
 
+@pytest.mark.parametrize("value", [None, ""])
+def test_negative_visible_raises_even_for_empty_input(value: str | None) -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        mask_secret(value, visible=-1)
+
+
 def test_output_never_contains_more_than_half_of_the_secret() -> None:
     for length in range(MIN_MASKED_LENGTH, 40):
         secret = "".join(chr(ord("a") + i % 26) for i in range(length))
