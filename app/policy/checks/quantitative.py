@@ -366,8 +366,7 @@ async def run_quantitative_checks(
     settings = get_settings()
     check = CheckResult()
 
-    date_key = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    budget_key = f"budget:daily:{agent.agent_id}:{agent.currency}:{asset_type}:{date_key}"
+    budget_key = daily_budget_key(agent.agent_id, asset_type, currency=agent.currency)
     loop_key = f"loop:txn:{agent.agent_id}:{fingerprint}"
     burst_key = (
         f"dest:burst:{agent.agent_id}:{network}:{destination_address}"
