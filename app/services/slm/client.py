@@ -278,10 +278,10 @@ class AnthropicSemanticClient:
 
 def _semantic_unavailable(reason_code: str) -> dict[str, Any]:
     return {
-        "alignment_label": "ALIGNED",
-        "risk_score": 20,
+        "alignment_label": None,
+        "risk_score": None,
         "reason_codes": [reason_code],
-        "evaluation_error": False,
+        "evaluation_error": True,
     }
 
 
