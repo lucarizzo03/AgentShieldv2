@@ -1,6 +1,8 @@
 import hashlib
 import json
-from datetime import datetime, timezone
+import statistics
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 from redis.asyncio import Redis
 
@@ -101,6 +103,204 @@ def daily_budget_key(
     return f"budget:daily:{agent_id}:{asset_type}:{currency.strip().upper()}:{date_key}"
 
 
+_ADAPTIVE_OUTLIER_REASONS = {
+    "ADAPTIVE_AMOUNT_OUTLIER",
+    "ADAPTIVE_DAILY_SPEND_OUTLIER",
+    "ADAPTIVE_HOURLY_RATE_OUTLIER",
+    "ADAPTIVE_VENDOR_DIVERSITY_OUTLIER",
+}
+
+
+def adaptive_baseline_key(agent_id: str, asset_type: str, currency: str) -> str:
+    return f"baseline:spend:{agent_id}:{asset_type}:{currency.strip().upper()}"
+
+
+def _adaptive_baseline_context(
+    key: str,
+    *,
+    sample_count: int = 0,
+    historical_days: int = 0,
+    evaluated: bool = False,
+    signals: dict | None = None,
+) -> dict:
+    settings = get_settings()
+    return {
+        "key": key,
+        "window_days": settings.adaptive_baseline_window_days,
+        "sample_count": sample_count,
+        "historical_days": historical_days,
+        "minimum_samples": settings.adaptive_baseline_min_samples,
+        "minimum_days": settings.adaptive_baseline_min_days,
+        "evaluated": evaluated,
+        "signals": signals or {},
+    }
+
+
+def _signal_stats(observed: float, history: list[float], z_score: float) -> dict:
+    mean = statistics.fmean(history)
+    stddev = statistics.pstdev(history, mean)
+    threshold = max(mean + z_score * stddev, mean * 2.0)
+    return {
+        "observed": observed,
+        "mean": round(mean, 4),
+        "stddev": round(stddev, 4),
+        "threshold": round(threshold, 4),
+        "outlier": observed > threshold,
+    }
+
+
+async def _evaluate_adaptive_baseline(
+    redis: Redis,
+    *,
+    agent_id: str,
+    asset_type: str,
+    currency: str,
+    amount_cents: int,
+    vendor: str,
+    moment: datetime | None = None,
+) -> tuple[list[str], dict]:
+    settings = get_settings()
+    key = adaptive_baseline_key(agent_id, asset_type, currency)
+    now = moment or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=settings.adaptive_baseline_window_days)
+
+    zrangebyscore = getattr(redis, "zrangebyscore", None)
+    if not callable(zrangebyscore):
+        return ["ADAPTIVE_BASELINE_INSUFFICIENT_HISTORY"], _adaptive_baseline_context(key)
+
+    raw = await zrangebyscore(key, cutoff.timestamp(), now.timestamp(), withscores=True)
+
+    observations: list[tuple[datetime, float, str]] = []
+    for entry in raw or []:
+        try:
+            member, score = entry
+            moment_seen = datetime.fromtimestamp(float(score), timezone.utc)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if isinstance(member, bytes):
+            member = member.decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(member)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        observed_amount = payload.get("amount_cents")
+        observed_vendor = payload.get("vendor")
+        if (
+            not payload.get("request_id")
+            or not isinstance(observed_amount, (int, float))
+            or isinstance(observed_amount, bool)
+            or observed_amount <= 0
+            or not isinstance(observed_vendor, str)
+        ):
+            continue
+        observations.append((moment_seen, float(observed_amount), observed_vendor.strip().lower()))
+
+    sample_count = len(observations)
+    today = now.date()
+    completed_days = {seen.date() for seen, _, _ in observations if seen.date() < today}
+    historical_days = len(completed_days)
+
+    if (
+        sample_count < settings.adaptive_baseline_min_samples
+        or historical_days < settings.adaptive_baseline_min_days
+    ):
+        return ["ADAPTIVE_BASELINE_INSUFFICIENT_HISTORY"], _adaptive_baseline_context(
+            key, sample_count=sample_count, historical_days=historical_days
+        )
+
+    current_hour = now.replace(minute=0, second=0, microsecond=0)
+    day_totals: dict = defaultdict(float)
+    day_vendors: dict = defaultdict(set)
+    hour_counts: dict = defaultdict(int)
+    current_day_spent = 0.0
+    current_day_vendors: set = set()
+    current_hour_count = 0
+    for seen, observed_amount, observed_vendor in observations:
+        if seen.date() == today:
+            current_day_spent += observed_amount
+            current_day_vendors.add(observed_vendor)
+            if seen >= current_hour:
+                current_hour_count += 1
+        else:
+            day_totals[seen.date()] += observed_amount
+            day_vendors[seen.date()].add(observed_vendor)
+            hour_counts[seen.replace(minute=0, second=0, microsecond=0)] += 1
+
+    z = settings.adaptive_baseline_z_score_threshold
+    candidate_vendor = vendor.strip().lower()
+    signals = {
+        "amount": _signal_stats(amount_cents, [amt for _, amt, _ in observations], z),
+        "daily_spend": _signal_stats(
+            current_day_spent + amount_cents, list(day_totals.values()), z
+        ),
+        "hourly_rate": _signal_stats(
+            current_hour_count + 1, [float(c) for c in hour_counts.values()], z
+        ),
+        "vendor_diversity": _signal_stats(
+            len(current_day_vendors | {candidate_vendor}),
+            [float(len(v)) for v in day_vendors.values()],
+            z,
+        ),
+    }
+
+    reasons = []
+    outlier_reasons = {
+        "amount": "ADAPTIVE_AMOUNT_OUTLIER",
+        "daily_spend": "ADAPTIVE_DAILY_SPEND_OUTLIER",
+        "hourly_rate": "ADAPTIVE_HOURLY_RATE_OUTLIER",
+        "vendor_diversity": "ADAPTIVE_VENDOR_DIVERSITY_OUTLIER",
+    }
+    for signal_name, signal in signals.items():
+        if signal["outlier"]:
+            reasons.append(outlier_reasons[signal_name])
+    if not reasons:
+        reasons.append("ADAPTIVE_BASELINE_NORMAL")
+
+    return reasons, _adaptive_baseline_context(
+        key,
+        sample_count=sample_count,
+        historical_days=historical_days,
+        evaluated=True,
+        signals=signals,
+    )
+
+
+async def record_adaptive_observation(
+    redis: Redis,
+    *,
+    request_id: str,
+    agent_id: str,
+    asset_type: str,
+    currency: str,
+    amount_cents: int,
+    vendor: str,
+    moment: datetime | None = None,
+) -> None:
+    if not callable(getattr(redis, "zadd", None)):
+        return
+    settings = get_settings()
+    key = adaptive_baseline_key(agent_id, asset_type, currency)
+    now = moment or datetime.now(timezone.utc)
+    cutoff = now - timedelta(days=settings.adaptive_baseline_window_days)
+    member = json.dumps(
+        {
+            "request_id": request_id,
+            "amount_cents": amount_cents,
+            "vendor": vendor.strip().lower(),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    pipe = redis.pipeline(transaction=True)
+    pipe.zadd(key, {member: now.timestamp()}, nx=True)
+    pipe.zremrangebyscore(key, "-inf", cutoff.timestamp())
+    pipe.zremrangebyrank(key, 0, -settings.adaptive_baseline_max_observations - 1)
+    pipe.expire(key, settings.adaptive_baseline_window_days * 86400 + 86400)
+    await pipe.execute()
+
+
 def reservation_marker_key(reservation_id: str) -> str:
     return f"{RESERVATION_MARKER_PREFIX}{reservation_id}"
 
@@ -160,6 +360,7 @@ async def run_quantitative_checks(
     network: str | None,
     destination_address: str | None,
     fingerprint: str,
+    vendor_url_or_name: str = "",
     reservation_id: str | None = None,
 ) -> CheckResult:
     settings = get_settings()
@@ -217,6 +418,24 @@ async def run_quantitative_checks(
                 check.hard_deny = True
                 check.reasons.append("DESTINATION_BURST_DETECTED")
 
+        baseline_reasons, baseline_context = await _evaluate_adaptive_baseline(
+            redis,
+            agent_id=agent.agent_id,
+            asset_type=asset_type,
+            currency=agent.currency,
+            amount_cents=amount_cents,
+            vendor=vendor_url_or_name,
+        )
+    else:
+        baseline_reasons = ["ADAPTIVE_BASELINE_INSUFFICIENT_HISTORY"]
+        baseline_context = _adaptive_baseline_context(
+            adaptive_baseline_key(agent.agent_id, asset_type, agent.currency)
+        )
+
+    check.reasons.extend(baseline_reasons)
+    if _ADAPTIVE_OUTLIER_REASONS & set(baseline_reasons):
+        check.suspicious = True
+
     check.context = {
         "budget_key": budget_key,
         "reservation_marker_key": marker_key if marker_ttl else None,
@@ -229,6 +448,7 @@ async def run_quantitative_checks(
         "budget_reserved": reserved,
         "loop_count": int(loop_count),
         "destination_burst_count": int(destination_burst),
+        "adaptive_baseline": baseline_context,
     }
     return check
 

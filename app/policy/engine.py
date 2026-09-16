@@ -136,6 +136,7 @@ async def run_financial_triangulation(
         network=network,
         destination_address=destination_address,
         fingerprint=fingerprint,
+        vendor_url_or_name=vendor_url_or_name,
         reservation_id=reservation_id,
     )
     observe("engine.check.quantitative.latency", time.perf_counter() - check_started)

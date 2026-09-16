@@ -24,6 +24,7 @@ from app.policy.checks.quantitative import (
     clear_reservation_marker,
     commit_budget_spend,
     finalize_budget_reservation,
+    record_adaptive_observation,
     release_velocity_counters,
     rollback_budget_reservation,
     transaction_fingerprint,
@@ -63,6 +64,10 @@ _HIGH_RISK_REASONS = {
     "GOAL_DRIFT_DETECTED",
     "GOAL_DRIFT_EVAL_UNAVAILABLE",
     "GOAL_DRIFT_LOW_CONFIDENCE",
+    "ADAPTIVE_AMOUNT_OUTLIER",
+    "ADAPTIVE_DAILY_SPEND_OUTLIER",
+    "ADAPTIVE_HOURLY_RATE_OUTLIER",
+    "ADAPTIVE_VENDOR_DIVERSITY_OUTLIER",
 }
 
 _CHECK_REASON_GROUPS = {
@@ -72,6 +77,12 @@ _CHECK_REASON_GROUPS = {
         "LOOP_PATTERN_DETECTED",
         "NO_LOOP_PATTERN",
         "DESTINATION_BURST_DETECTED",
+        "ADAPTIVE_BASELINE_INSUFFICIENT_HISTORY",
+        "ADAPTIVE_BASELINE_NORMAL",
+        "ADAPTIVE_AMOUNT_OUTLIER",
+        "ADAPTIVE_DAILY_SPEND_OUTLIER",
+        "ADAPTIVE_HOURLY_RATE_OUTLIER",
+        "ADAPTIVE_VENDOR_DIVERSITY_OUTLIER",
     },
     "check_b_policy": {
         "VENDOR_MATCHED_BLOCKLIST",
@@ -457,6 +468,22 @@ async def _record_decision(
             logger.critical(
                 "Budget commit failed after payment execution — manual recovery required",
                 extra={"agent_id": payload.agent_id, "amount_cents": payload.amount_cents, "request_id": request_id},
+                exc_info=True,
+            )
+        try:
+            await record_adaptive_observation(
+                redis,
+                request_id=request_id,
+                agent_id=payload.agent_id,
+                asset_type=payload.asset_type,
+                currency=payload.currency,
+                amount_cents=payload.amount_cents,
+                vendor=payload.vendor_url_or_name,
+            )
+        except Exception:
+            logger.error(
+                "Adaptive baseline observation recording failed",
+                extra={"agent_id": payload.agent_id, "request_id": request_id},
                 exc_info=True,
             )
         body = {

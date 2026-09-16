@@ -28,5 +28,10 @@ def engine_provenance() -> dict:
             "loop_threshold": settings.loop_threshold,
             "loop_window_seconds": settings.loop_window_seconds,
             "slm_deadline_seconds": settings.slm_deadline_seconds,
+            "adaptive_baseline_window_days": settings.adaptive_baseline_window_days,
+            "adaptive_baseline_min_samples": settings.adaptive_baseline_min_samples,
+            "adaptive_baseline_min_days": settings.adaptive_baseline_min_days,
+            "adaptive_baseline_z_score_threshold": settings.adaptive_baseline_z_score_threshold,
+            "adaptive_baseline_max_observations": settings.adaptive_baseline_max_observations,
         },
     }
