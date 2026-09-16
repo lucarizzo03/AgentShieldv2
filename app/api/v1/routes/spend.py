@@ -538,7 +538,7 @@ async def _record_decision(
             },
         )
         await session.commit()
-        if tri.quantitative_result.get("budget_reserved", False):
+        if tri.quantitative_result.get("budget_finalized", False):
             try:
                 await rollback_budget_reservation(
                     redis,
