@@ -26,3 +26,8 @@ def is_masked(value: str | None) -> bool:
     if not value:
         return False
     return all(ch == MASK_CHAR for ch in value)
+
+
+def mask_all(values: list[str | None], visible: int = 4) -> list[str]:
+    """Mask each secret in ``values``; None/empty entries become ""."""
+    return [mask_secret(v, visible=visible) for v in values]
