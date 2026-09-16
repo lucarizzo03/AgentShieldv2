@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.redact import MASK_CHAR, MIN_MASKED_LENGTH, mask_secret
+from app.core.redact import MASK_CHAR, MIN_MASKED_LENGTH, is_masked, mask_secret
 
 
 def test_none_and_empty_return_empty_string() -> None:
@@ -70,3 +70,57 @@ def test_output_never_contains_more_than_half_of_the_secret() -> None:
         revealed = masked.count(MASK_CHAR)
         assert revealed >= length - length // 2
         assert masked.endswith(secret[-(length // 2):])
+
+
+@pytest.mark.parametrize("value", [MASK_CHAR, MASK_CHAR * 7, MASK_CHAR * 64])
+def test_is_masked_true_for_only_mask_chars(value: str) -> None:
+    assert is_masked(value) is True
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_is_masked_false_for_none_and_empty(value: str | None) -> None:
+    assert is_masked(value) is False
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sk_live_abcdef123456",
+        MASK_CHAR * 16 + "3456",
+        "a" + MASK_CHAR * 10,
+        MASK_CHAR * 5 + "x" + MASK_CHAR * 5,
+        " " + MASK_CHAR * 8,
+        MASK_CHAR * 8 + "\n",
+        "x",
+    ],
+)
+def test_is_masked_false_when_any_non_mask_char_present(value: str) -> None:
+    assert is_masked(value) is False
+
+
+def test_is_masked_does_not_treat_other_placeholder_chars_as_mask() -> None:
+    for ch in ("\u2022", "#", "x", "-"):
+        assert ch != MASK_CHAR
+        assert is_masked(ch * 12) is False
+
+
+@pytest.mark.parametrize("value", ["a", "abc", "abcdefg"])
+def test_is_masked_recognises_fully_masked_short_secrets(value: str) -> None:
+    assert is_masked(mask_secret(value)) is True
+
+
+def test_is_masked_recognises_visible_zero_output() -> None:
+    assert is_masked(mask_secret("sk_live_abcdef123456", visible=0)) is True
+
+
+def test_is_masked_false_for_partially_masked_output() -> None:
+    secret = "sk_live_abcdef123456"
+    assert is_masked(mask_secret(secret)) is False
+    assert is_masked(mask_secret(secret, visible=1)) is False
+    assert is_masked(secret) is False
+
+
+def test_is_masked_is_idempotent_with_mask_secret() -> None:
+    masked = mask_secret("sk_live_abcdef123456", visible=0)
+    assert is_masked(masked) is True
+    assert is_masked(mask_secret(masked)) is True
