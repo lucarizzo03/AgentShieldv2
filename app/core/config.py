@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     hitl_default_timeout_seconds: int = Field(default=600)
     loop_window_seconds: int = Field(default=60)
     loop_threshold: int = Field(default=5)
+    adaptive_baseline_window_days: int = Field(default=30, ge=2)
+    adaptive_baseline_min_samples: int = Field(default=20, ge=1)
+    adaptive_baseline_min_days: int = Field(default=3, ge=1)
+    adaptive_baseline_z_score_threshold: float = Field(default=3.0, gt=0)
+    adaptive_baseline_max_observations: int = Field(default=1000, ge=20)
     # Alignment score bands (0-100, higher = more aligned):
     #   >= semantic_aligned_min_score         → ALIGNED  → safe
     #   >= semantic_weak_suspicious_min_score → WEAK     → suspicious (HITL)
@@ -90,6 +95,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_secrets_for_environment(self) -> "Settings":
+        if self.adaptive_baseline_min_samples > self.adaptive_baseline_max_observations:
+            raise ValueError(
+                "ADAPTIVE_BASELINE_MIN_SAMPLES cannot exceed "
+                "ADAPTIVE_BASELINE_MAX_OBSERVATIONS"
+            )
+        if self.adaptive_baseline_min_days > self.adaptive_baseline_window_days:
+            raise ValueError(
+                "ADAPTIVE_BASELINE_MIN_DAYS cannot exceed ADAPTIVE_BASELINE_WINDOW_DAYS"
+            )
         if self.app_env.lower() != "dev":
             if self.webhook_hmac_secret == "dev-webhook-hmac-secret-change-me":
                 raise ValueError(

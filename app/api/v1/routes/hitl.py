@@ -24,6 +24,7 @@ from app.policy.checks.policy_db import run_policy_checks
 from app.policy.checks.quantitative import (
     commit_budget_spend,
     daily_budget_key,
+    record_adaptive_observation,
     rollback_budget_reservation,
 )
 from app.policy.provenance import engine_provenance
@@ -250,6 +251,24 @@ async def _resolve_pending(
                 pending.payload_json["amount_cents"],
             )
         raise
+
+    if payload.decision == "APPROVE":
+        try:
+            await record_adaptive_observation(
+                redis,
+                request_id=request_id,
+                agent_id=original.agent_id,
+                asset_type=original.asset_type,
+                currency=original.currency,
+                amount_cents=original.amount_cents,
+                vendor=original.vendor_url_or_name,
+            )
+        except Exception:
+            logger.error(
+                "Adaptive baseline observation recording failed",
+                extra={"request_id": request_id},
+                exc_info=True,
+            )
 
     # Push the verdict to the agent's callback URL (signed + retried) so it
     # doesn't have to poll. Runs after the response is sent; polling stays as
