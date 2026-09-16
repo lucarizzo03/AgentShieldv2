@@ -1,6 +1,12 @@
 import pytest
 
-from app.core.redact import MASK_CHAR, MIN_MASKED_LENGTH, is_masked, mask_secret
+from app.core.redact import (
+    MASK_CHAR,
+    MIN_MASKED_LENGTH,
+    is_masked,
+    mask_all,
+    mask_secret,
+)
 
 
 def test_none_and_empty_return_empty_string() -> None:
@@ -124,3 +130,56 @@ def test_is_masked_is_idempotent_with_mask_secret() -> None:
     masked = mask_secret("sk_live_abcdef123456", visible=0)
     assert is_masked(masked) is True
     assert is_masked(mask_secret(masked)) is True
+
+
+def test_mask_all_empty_list_returns_empty_list() -> None:
+    assert mask_all([]) == []
+
+
+def test_mask_all_handles_mixed_none_empty_short_and_long_values() -> None:
+    values: list[str | None] = [None, "", "abc", "sk_live_abcdef123456"]
+    assert mask_all(values) == [
+        "",
+        "",
+        MASK_CHAR * 3,
+        MASK_CHAR * 16 + "3456",
+    ]
+
+
+def test_mask_all_preserves_order_and_length() -> None:
+    values: list[str | None] = ["sk_live_abcdef123456", None, "abcdefghijkl", ""]
+    masked = mask_all(values)
+    assert len(masked) == len(values)
+    assert masked == [mask_secret(v) for v in values]
+
+
+def test_mask_all_passes_visible_through_to_mask_secret() -> None:
+    values: list[str | None] = ["abcdefghijkl", "0123456789", "abc"]
+    assert mask_all(values, visible=2) == [
+        MASK_CHAR * 10 + "kl",
+        MASK_CHAR * 8 + "89",
+        MASK_CHAR * 3,
+    ]
+    assert mask_all(values, visible=1000) == [mask_secret(v, visible=1000) for v in values]
+
+
+def test_mask_all_visible_zero_masks_everything() -> None:
+    values: list[str | None] = ["sk_live_abcdef123456", "abc", None]
+    masked = mask_all(values, visible=0)
+    assert masked == [MASK_CHAR * 20, MASK_CHAR * 3, ""]
+    assert all(is_masked(m) for m in masked[:2])
+
+
+@pytest.mark.parametrize("visible", [-1, -100])
+def test_mask_all_negative_visible_raises_value_error(visible: int) -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        mask_all(["sk_live_abcdef123456"], visible=visible)
+
+
+def test_mask_all_negative_visible_raises_even_for_none_and_empty_entries() -> None:
+    with pytest.raises(ValueError, match="non-negative"):
+        mask_all([None, ""], visible=-1)
+
+
+def test_mask_all_negative_visible_does_not_raise_for_empty_list() -> None:
+    assert mask_all([], visible=-1) == []
