@@ -19,3 +19,10 @@ def mask_secret(value: str | None, visible: int = 4) -> str:
         return MASK_CHAR * len(value)
     visible = min(visible, len(value) // 2)
     return MASK_CHAR * (len(value) - visible) + value[-visible:]
+
+
+def is_masked(value: str | None) -> bool:
+    """Return True if ``value`` is fully masked (only mask characters)."""
+    if not value:
+        return False
+    return all(ch == MASK_CHAR for ch in value)
