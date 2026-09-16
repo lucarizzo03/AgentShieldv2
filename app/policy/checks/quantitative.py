@@ -406,7 +406,7 @@ async def run_quantitative_checks(
         # `>=` means the threshold-th identical request within the window is the
         # one that trips: with loop_threshold=5, the 5th request is denied.
         loop_count = await redis.eval(_INCR_WITH_TTL, 1, loop_key, settings.loop_window_seconds)
-        if loop_count >= settings.loop_threshold:
+        if loop_count > settings.loop_threshold:
             check.hard_deny = True
             check.reasons.append("LOOP_PATTERN_DETECTED")
         else:
