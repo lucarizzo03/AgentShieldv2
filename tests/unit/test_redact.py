@@ -1,6 +1,6 @@
 import pytest
 
-from app.core.redact import MASK_CHAR, MIN_MASKED_LENGTH, mask_secret
+from app.core.redact import MASK_CHAR, MIN_MASKED_LENGTH, is_partially_masked, mask_secret
 
 
 def test_none_and_empty_return_empty_string() -> None:
@@ -70,3 +70,38 @@ def test_output_never_contains_more_than_half_of_the_secret() -> None:
         revealed = masked.count(MASK_CHAR)
         assert revealed >= length - length // 2
         assert masked.endswith(secret[-(length // 2):])
+
+
+def test_is_partially_masked_none_and_empty_are_false() -> None:
+    assert is_partially_masked(None) is False
+    assert is_partially_masked("") is False
+
+
+@pytest.mark.parametrize("value", ["*", "****", MASK_CHAR * 32])
+def test_is_partially_masked_fully_masked_is_false(value: str) -> None:
+    assert is_partially_masked(value) is False
+
+
+@pytest.mark.parametrize("value", ["sk_live_abcdef123456", "abc", "no-mask-here"])
+def test_is_partially_masked_unmasked_is_false(value: str) -> None:
+    assert MASK_CHAR not in value
+    assert is_partially_masked(value) is False
+
+
+@pytest.mark.parametrize("value", ["****3456", "*a", "a*", "ab**cd", MASK_CHAR * 20 + "Z"])
+def test_is_partially_masked_mixed_is_true(value: str) -> None:
+    assert is_partially_masked(value) is True
+
+
+def test_is_partially_masked_agrees_with_mask_secret_output() -> None:
+    long_secret = "sk_live_abcdef123456"
+    assert is_partially_masked(mask_secret(long_secret)) is True
+    assert is_partially_masked(mask_secret(long_secret, visible=0)) is False
+    assert is_partially_masked(mask_secret("short")) is False
+    assert is_partially_masked(mask_secret(None)) is False
+    assert is_partially_masked(mask_secret("")) is False
+
+
+def test_is_partially_masked_returns_bool() -> None:
+    for value in [None, "", "***", "**ab", "plain"]:
+        assert isinstance(is_partially_masked(value), bool)
